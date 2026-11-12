@@ -11,6 +11,10 @@ parallelisation approach.
 **Status: Week 7 - project setup.** The scoring parameters and test sequences are
 finalised and the Colab notebook and repository are set up. No algorithm code yet
 (C in Weeks 8-9, CUDA from Week 10).
+**Status: Week 8 - sequential C, matrix filling.** `c/sw_seq.c` reads the FASTA input,
+fills the scoring matrix row by row and reports the maximum score and its cell, and matches
+the independent Python reference on every input. Traceback and baseline timings come in
+Week 9, CUDA from Week 10.
 
 ## Contents
 
@@ -19,6 +23,8 @@ data/                      test_*.fasta  hand-checkable inputs
                            bench_*.fasta 1,000 / 5,000 / 10,000-base benchmark inputs
 scripts/gen_sequences.py   reproducible generator for the benchmark inputs
 scripts/check_expected.py  independent Python check of the expected results below
+scripts/check_c_week8.py   compares the C program with the Python reference (score, cell, matrix)
+c/sw_seq.c                 sequential C baseline (Week 8: input, matrix filling, score tracking)
 colab/SW_Week7_Setup.ipynb Colab notebook: GPU / nvcc check, clone, validate inputs
 results/                   benchmark output goes here (Weeks 9 and 12)
 ```
@@ -111,6 +117,19 @@ git push -u origin main
 Then add the other members under Settings -> Collaborators, and put the repository URL
 into the `REPO_URL` cell of the notebook. Members with an NVIDIA GPU may also build locally
 (Visual Studio 2019/2022 + CUDA Toolkit), but final timings come from Colab only.
+
+## Build and run the C baseline (Week 8)
+
+From `smith-waterman/`:
+
+```bash
+gcc -O2 -Wall -Wextra -o c/sw_seq c/sw_seq.c
+./c/sw_seq data/test_paper.fasta                 # prints the matrix (inputs up to 40 x 40) and the max score
+./c/sw_seq data/bench_1000.fasta --no-matrix     # larger inputs: score and cell only
+python3 scripts/check_c_week8.py                 # C vs Python reference (add --all for bench_5000)
+```
+
+Expected for `test_paper.fasta`: max score 3 at H(4, 5), and the matrix shown above.
 
 ## Plan
 
