@@ -44,11 +44,11 @@
  *     bin\sw_seq.exe data\test_paper.fasta --match 2 --mismatch 1 --gap 3
  */
 #ifndef _CRT_SECURE_NO_WARNINGS
-#define _CRT_SECURE_NO_WARNINGS /* MSVC: allow fopen/strcpy without warnings */
+#define _CRT_SECURE_NO_WARNINGS // so MSVC doesn't warn about fopen/strcpy
 #endif
 
 #if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
-#define _POSIX_C_SOURCE 199309L /* clock_gettime under -std=c99 on Linux */
+#define _POSIX_C_SOURCE 199309L 
 #endif
 
 #include <ctype.h>
@@ -67,41 +67,41 @@
 #include <time.h>
 #endif
 
-/* Default scoring parameters */
-#define DEFAULT_MATCH 1    /* m  */
-#define DEFAULT_MISMATCH 1 /* mu (subtracted) */
-#define DEFAULT_GAP 2      /* d  (subtracted, once per gap column) */
+// default scoring values
+#define DEFAULT_MATCH 1    // added when letters match
+#define DEFAULT_MISMATCH 1 // subtracted when letters don't match
+#define DEFAULT_GAP 2      // subtracted for every gap
 
-/* Print the whole matrix only when it is small enough to read. */
+// only print the matrix if it's small enough to read
 #define PRINT_LIMIT 40
 
-/* Longest sequence accepted: (46001)^2 cells * 4 bytes is about 8.5 GB. */
+// max sequence length, (46001)^2 cells * 4 bytes is about 8.5 GB
 #define MAX_SEQ_LEN 46000
 
 typedef struct {
-    int match;    /* added when a[i] == b[j]        */
-    int mismatch; /* subtracted when a[i] != b[j]   */
-    int gap;      /* subtracted for each gap column */
+    int match;
+    int mismatch;
+    int gap;
 } Scoring;
 
 typedef struct {
-    int score;                   /* maximum value in the matrix            */
-    int i, j;                    /* first cell (row-major) holding it      */
-    unsigned long long checksum; /* sum of every cell, for C/CUDA compares */
+    int score;                   // highest value in the matrix
+    int i, j;                    // first cell (row by row) with that value
+    unsigned long long checksum; // sum of all cells, used to compare C and CUDA
 } FillResult;
 
 typedef struct {
-    char *buf_a;          /* owned buffers (free with free_alignment)          */
+    char *buf_a;        // buffers we allocated, freed in free_alignment
     char *buf_b;
-    char *a_aln;          /* aligned a, '-' = gap, NUL-terminated (into buf_a) */
-    char *b_aln;          /* aligned b, same length as a_aln (into buf_b)      */
-    int len;              /* number of alignment columns                       */
-    int i_start, i_end;   /* 1-based inclusive range in a                      */
-    int j_start, j_end;   /* 1-based inclusive range in b                      */
+    char *a_aln;        // aligned a, '-' is a gap (points inside buf_a)
+    char *b_aln;        // aligned b, same length as a_aln (points inside buf_b)
+    int len;            // number of columns in the alignment
+    int i_start, i_end; // range in a (1-based, inclusive)
+    int j_start, j_end; // range in b (1-based, inclusive)
     int matches, mismatches, gaps;
 } Alignment;
 
-/* Width of one block of the printed alignment. */
+// how many columns to print per block of the alignment
 #define ALIGN_LINE 60
 
 static int max4(int a, int b, int c, int d)
@@ -113,7 +113,7 @@ static int max4(int a, int b, int c, int d)
     return m;
 }
 
-/* Monotonic wall-clock time in seconds (only differences are meaningful). */
+// gets the current time in seconds, only the difference between two calls matters
 static double now_seconds(void)
 {
 #ifdef _WIN32
@@ -128,19 +128,14 @@ static double now_seconds(void)
 #endif
 }
 
-/* Matrix cell (i, j) in a flat array of (M+1) x (N+1) ints. */
+// gets cell (i, j) from the matrix stored as one flat array
 #define IDX(i, j, ncols) ((size_t)(i) * (size_t)(ncols) + (size_t)(j))
 
-/* ------------------------------------------------------------------ */
-/* Input reading                                                      */
-/* ------------------------------------------------------------------ */
+// reading the input
 
-/*
- * Reads a FASTA file with exactly two records and returns the two sequences
- * as newly allocated, upper-case, NUL-terminated strings.
- * Returns 0 on success, -1 on any error (message printed to stderr).
- * Handles multi-line records, blank lines and CRLF line endings.
- */
+// reads a FASTA file with exactly two records and gives back the two sequences
+// (uppercase, heap allocated). returns 0 if ok, -1 if there's an error.
+// works with multi-line records, blank lines, and CRLF line endings.
 static int read_fasta_pair(const char *path, char **out_a, char **out_b)
 {
     FILE *f = fopen(path, "r");
@@ -151,10 +146,10 @@ static int read_fasta_pair(const char *path, char **out_a, char **out_b)
 
     char *seq[2] = {NULL, NULL};
     size_t len[2] = {0, 0}, cap[2] = {0, 0};
-    int nrec = 0; /* records seen so far */
-    int cur = -1; /* index of the record being filled */
+    int nrec = 0; // number of records seen so far
+    int cur = -1; // which record we are filling right now
 
-    /* portable getline replacement: a line buffer that grows with fgets */
+    // line buffer that grows as needed (replacement for getline)
     size_t buf_size = 4096;
     char *line = (char *)malloc(buf_size);
     if (!line) {
@@ -183,15 +178,15 @@ static int read_fasta_pair(const char *path, char **out_a, char **out_b)
             used += strlen(line + used);
             if (used > 0 && line[used - 1] == '\n') break;
         }
-        if (!got_any) break; /* end of file */
+        if (!got_any) break; // end of file
 
-        /* strip trailing CR / LF / spaces */
+        // remove trailing CR, LF, and spaces
         while (used > 0 && (line[used - 1] == '\n' || line[used - 1] == '\r' ||
                             line[used - 1] == ' ' || line[used - 1] == '\t'))
             line[--used] = '\0';
-        if (used == 0) continue; /* blank line */
+        if (used == 0) continue; // blank line
 
-        if (line[0] == '>') { /* header: start a record */
+        if (line[0] == '>') { // header, start of a new record
             if (nrec == 2) {
                 fprintf(stderr, "error: more than two records in '%s'\n", path);
                 goto fail;
@@ -240,15 +235,11 @@ fail:
     return -1;
 }
 
-/* ------------------------------------------------------------------ */
-/* Matrix filling + score tracking                                    */
-/* ------------------------------------------------------------------ */
+// filling the matrix
 
-/*
- * Fills H (already zeroed by calloc, so row 0 and column 0 are the 0s required
- * by the initialisation step) row by row, left to right, and reports the
- * maximum score, its cell and a checksum of the whole matrix.
- */
+// fills H row by row, left to right. H was already zeroed so row 0 and
+// column 0 are 0 (the initialization step). also tracks the max score,
+// where it is, and the checksum of all the cells.
 static FillResult fill_matrix(const char *a, int M, const char *b, int N,
                               int *H, Scoring sc)
 {
@@ -262,15 +253,15 @@ static FillResult fill_matrix(const char *a, int M, const char *b, int N,
     for (int i = 1; i <= M; i++) {
         for (int j = 1; j <= N; j++) {
             int s = (a[i - 1] == b[j - 1]) ? sc.match : -sc.mismatch;
-            int diag = H[IDX(i - 1, j - 1, ncols)] + s;      /* match / mismatch */
-            int up = H[IDX(i - 1, j, ncols)] - sc.gap;       /* gap in b */
-            int left = H[IDX(i, j - 1, ncols)] - sc.gap;     /* gap in a */
+            int diag = H[IDX(i - 1, j - 1, ncols)] + s;  // match or mismatch
+            int up = H[IDX(i - 1, j, ncols)] - sc.gap;   // gap in b
+            int left = H[IDX(i, j - 1, ncols)] - sc.gap; // gap in a
 
             int h = max4(0, diag, up, left);
             H[IDX(i, j, ncols)] = h;
             r.checksum += (unsigned long long)h;
 
-            if (h > r.score) { /* strict '>': keeps the FIRST maximum */
+            if (h > r.score) { // strict '>' so we keep the first max
                 r.score = h;
                 r.i = i;
                 r.j = j;
@@ -280,9 +271,7 @@ static FillResult fill_matrix(const char *a, int M, const char *b, int N,
     return r;
 }
 
-/* ------------------------------------------------------------------ */
-/* Traceback + independent re-score                                   */
-/* ------------------------------------------------------------------ */
+// traceback and re-score
 
 static void free_alignment(Alignment *al)
 {
@@ -291,18 +280,16 @@ static void free_alignment(Alignment *al)
     al->buf_a = al->buf_b = al->a_aln = al->b_aln = NULL;
 }
 
-/*
- * Traceback from the best cell (bi, bj) until a 0 is reached. At each cell the
- * moves are tried in a fixed order: diagonal, up (gap in b), left (gap in a).
- * The moves are recomputed from H and the sequences (no direction matrix).
- * The aligned strings are built backwards, so no reverse pass is needed.
- * Returns 0 on success, -1 on allocation failure or an inconsistent matrix.
- */
+// traceback starting at the best cell (bi, bj) until we reach a 0.
+// the order of moves is: diagonal, up (gap in b), left (gap in a).
+// the moves are recomputed from H and the sequences so no direction matrix is needed.
+// the strings are built from the back so we don't have to reverse them after.
+// returns 0 if ok, -1 if allocation fails or the matrix is inconsistent.
 static int traceback(const char *a, const char *b, int M, int N, const int *H,
                      Scoring sc, int bi, int bj, Alignment *out)
 {
     const int ncols = N + 1;
-    const size_t cap = (size_t)M + (size_t)N + 1; /* longest possible alignment + 1 */
+    const size_t cap = (size_t)M + (size_t)N + 1; // longest possible alignment + 1
 
     memset(out, 0, sizeof *out);
     out->buf_a = (char *)malloc(cap + 1);
@@ -326,7 +313,7 @@ static int traceback(const char *a, const char *b, int M, int N, const int *H,
 
         if (i > 0 && j > 0) {
             int s = (a[i - 1] == b[j - 1]) ? sc.match : -sc.mismatch;
-            if (h == H[IDX(i - 1, j - 1, ncols)] + s) { /* 1. diagonal */
+            if (h == H[IDX(i - 1, j - 1, ncols)] + s) { // 1. diagonal
                 --pos;
                 out->buf_a[pos] = a[i - 1];
                 out->buf_b[pos] = b[j - 1];
@@ -337,7 +324,7 @@ static int traceback(const char *a, const char *b, int M, int N, const int *H,
                 continue;
             }
         }
-        if (i > 0 && h == H[IDX(i - 1, j, ncols)] - sc.gap) { /* 2. up: gap in b */
+        if (i > 0 && h == H[IDX(i - 1, j, ncols)] - sc.gap) { // 2. up, gap in b
             --pos;
             out->buf_a[pos] = a[i - 1];
             out->buf_b[pos] = '-';
@@ -345,7 +332,7 @@ static int traceback(const char *a, const char *b, int M, int N, const int *H,
             i--;
             continue;
         }
-        if (j > 0 && h == H[IDX(i, j - 1, ncols)] - sc.gap) { /* 3. left: gap in a */
+        if (j > 0 && h == H[IDX(i, j - 1, ncols)] - sc.gap) { // 3. left, gap in a
             --pos;
             out->buf_a[pos] = '-';
             out->buf_b[pos] = b[j - 1];
@@ -360,7 +347,7 @@ static int traceback(const char *a, const char *b, int M, int N, const int *H,
         return -1;
     }
 
-    out->i_start = i + 1; /* the cell where the walk stopped (a 0) is not aligned */
+    out->i_start = i + 1; // the cell where we stopped is a 0, so it's not part of the alignment
     out->j_start = j + 1;
     out->len = (int)(cap - pos);
     out->a_aln = out->buf_a + pos;
@@ -368,19 +355,17 @@ static int traceback(const char *a, const char *b, int M, int N, const int *H,
     return 0;
 }
 
-/*
- * Scores the alignment from the two aligned strings only (H is not used) and
- * checks that the strings are well formed: same length, no gap/gap column, and
- * the un-gapped strings equal a[i_start..i_end] and b[j_start..j_end].
- * Returns the score, or INT_MIN if the alignment is malformed.
- */
+// scores the alignment using only the two aligned strings (not H) and checks
+// that they are valid: same length, no gap-gap column, and removing the gaps
+// gives back a[i_start..i_end] and b[j_start..j_end].
+// returns the score, or INT_MIN if the alignment is invalid.
 static int rescore_alignment(const Alignment *al, const char *a, const char *b, Scoring sc)
 {
     if (!al->a_aln || !al->b_aln) return INT_MIN;
     if ((int)strlen(al->a_aln) != al->len || (int)strlen(al->b_aln) != al->len) return INT_MIN;
 
     int score = 0;
-    int ia = al->i_start - 1; /* 0-based index of the next residue of a */
+    int ia = al->i_start - 1; // 0-based index of the next letter in a
     int jb = al->j_start - 1;
     for (int k = 0; k < al->len; k++) {
         char x = al->a_aln[k], y = al->b_aln[k];
@@ -400,20 +385,16 @@ static int rescore_alignment(const Alignment *al, const char *a, const char *b, 
             score += (x == y) ? sc.match : -sc.mismatch;
         }
     }
-    /* the walk must end exactly at the recorded end cell */
+    // we should end exactly at the end cell we recorded
     if (ia != al->i_end || jb != al->j_end) return INT_MIN;
     return score;
 }
 
-/* ------------------------------------------------------------------ */
-/* Output                                                             */
-/* ------------------------------------------------------------------ */
+// printing
 
-/*
- * Prints the alignment in blocks of ALIGN_LINE columns. Each block has an
- * "a" line, a match-bar line and a "b" line; the number is the 1-based index
- * of the next residue of that sequence at the start of the block.
- */
+// prints the alignment in blocks of ALIGN_LINE columns. each block has the
+// a line, a line of bars for matches, and the b line. the number on the left
+// is the 1-based index of the next letter of that sequence.
 static void print_alignment(const Alignment *al)
 {
     printf("Alignment: length %d (%d matches, %d mismatches, %d gaps)\n", al->len,
@@ -472,7 +453,7 @@ static void usage(const char *prog)
             prog, DEFAULT_MATCH, DEFAULT_MISMATCH, DEFAULT_GAP);
 }
 
-/* Parses a positive int; returns 0 on success, -1 otherwise. */
+// parses a positive int, returns 0 if ok and -1 if not
 static int parse_positive(const char *text, int *out)
 {
     char *end = NULL;
@@ -483,15 +464,15 @@ static int parse_positive(const char *text, int *out)
     return 0;
 }
 
-/* memset called through a volatile pointer so it cannot be optimised away or
-   merged with malloc into calloc (see the timed region in main). */
+// memset through a volatile pointer so the compiler can't remove it or
+// combine it with malloc into calloc (see the timed part in main)
 static void *(*volatile zero_memory_fn)(void *, int, size_t) = memset;
 static void zero_memory(void *p, size_t n) { zero_memory_fn(p, 0, n); }
 
-/* Largest accepted value of --repeat. */
+// max value allowed for --repeat
 #define MAX_REPEAT 1000
 
-/* Per-run times in seconds. */
+// time of each run in seconds
 typedef struct {
     double alloc, fill, trace, total;
 } RunTime;
@@ -502,7 +483,7 @@ static int cmp_double(const void *x, const void *y)
     return (a > b) - (a < b);
 }
 
-/* min / median / mean of v[0..n-1] (v is sorted in place). */
+// gets the min, median, and mean of v[0..n-1] (this sorts v)
 static void stats(double *v, int n, double *mn, double *med, double *mean)
 {
     qsort(v, (size_t)n, sizeof(double), cmp_double);
@@ -513,7 +494,7 @@ static void stats(double *v, int n, double *mn, double *med, double *mean)
     *mean = sum / n;
 }
 
-/* File name without directories and without a ".fasta" extension. */
+// gets the file name without the folders and without the ".fasta" at the end
 static void base_name(const char *path, char *out, size_t cap)
 {
     const char *p = path, *s;
@@ -593,18 +574,18 @@ int main(int argc, char **argv)
     double mb = (double)cells * sizeof(int) / (1024.0 * 1024.0);
 
     int status = 0;
-    int printed = 0;      /* the results are printed once, from the first run   */
-    FillResult first = {0, 0, 0, 0}; /* first run's result; later runs must equal it */
-    RunTime times[MAX_REPEAT + 1]; /* times[0] = warm-up run, times[1..] = timed */
+    int printed = 0;                 // results are only printed on the first run
+    FillResult first = {0, 0, 0, 0}; // result of the first run, other runs must match it
+    RunTime times[MAX_REPEAT + 1];   // times[0] is the warm-up run, times[1..] are the timed ones
 
     for (int run = warmup ? 0 : 1; run <= repeat; run++) {
-        /* ---- timed region: allocation (+ zeroing), fill, traceback ---- */
+        // timed part: allocation (+ zeroing), fill, traceback
         double t0 = now_seconds();
         int *H = (int *)malloc(cells * sizeof(int));
-        /* Zero through a volatile pointer: otherwise the compiler may turn
-           malloc+memset into a lazy calloc and the page faults would be
-           charged to the fill instead of the allocation. */
-        if (H) zero_memory(H, cells * sizeof(int)); /* row 0 / column 0 must be 0 */
+        // zero it through a volatile pointer, otherwise the compiler may turn
+        // malloc + memset into calloc and the page faults would be counted in
+        // the fill time instead of the allocation time
+        if (H) zero_memory(H, cells * sizeof(int)); // row 0 and column 0 must be 0
         double t1 = now_seconds();
         if (!H) {
             fprintf(stderr, "error: cannot allocate %.1f MB for the matrix\n", mb);
@@ -626,7 +607,7 @@ int main(int argc, char **argv)
         times[run].fill = t2 - t1;
         times[run].trace = t3 - t2;
         times[run].total = t3 - t0;
-        /* ---- end of timed region ---- */
+        // end of timed part
 
         if (tb_failed) status = 1;
 
