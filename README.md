@@ -458,6 +458,11 @@ Or open `colab/SW_Week7_Setup.ipynb` in Google Colab with a GPU runtime and run 
 The Week 8 commands are listed under *Reproducing the Week 8 checks*.
 
 ## References
+Claude was used in the search, analysis, and breakdown of references and researches
+
+Copilot was used as a helper tool for the formatting of the README
+
+## References
 
 Numbering follows the project proposal.
 
