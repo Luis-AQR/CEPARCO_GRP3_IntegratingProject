@@ -90,7 +90,7 @@ passage or an unrecognised malware variant.
 |------|-------------------------------|--------|
 | 7 | Finalise scoring parameters and test sequences; set up Colab notebook and GitHub repository | **Done** - Colab confirmed; merge into `main` still open, see *Open items* |
 | **8** | Sequential C: input reading, matrix filling, score tracking | **Done** (see *Week 8 report*) - C output matches the Python reference on all 6 inputs checked |
-| 9 | C traceback; record baseline execution times | **In progress** - C traceback done and verified (see *Week 9 report*); baseline timings not yet recorded |
+| 9 | C traceback; record baseline execution times | **In progress** - C traceback done and verified; timing code and Colab notebook ready; the official timings still have to be run on Colab (see *Week 9 report*) |
 | 10 | Mid-project demo: C baseline + working CUDA matrix filling | Not started |
 | 11 | CUDA traceback and alignment reconstruction; compare with C | Not started |
 | 12 | Larger inputs, `nsys` profiling, speedup; tiled wavefront if launch overhead is high | Not started |
@@ -98,7 +98,7 @@ passage or an unrecognised malware variant.
 
 ---
 
-## Week 9 report (traceback done; baseline timings still to do)
+## Week 9 report (traceback done; timing code ready, Colab run pending)
 
 **Milestone:** C traceback; record baseline execution times.
 **Deliverable:** verified C program with traceback (done), and baseline execution times (not yet done).
@@ -138,11 +138,21 @@ checksums are unchanged. Custom scoring also re-scores correctly (`test_gap --ma
 * **Validity** is judged by the re-score and the coordinates. String equality with the Python reference is also checked because both sides use the same fixed priority.
 * **Checks can fail.** A scratch build whose traceback prefers up over diagonal on a tie was caught by `check_c_week9.py` on `bench_1000` (strings differ, re-score still OK); a wrong gap penalty in the re-score was caught as `MISMATCH`. Swapping only up and left changed nothing on these inputs, because an up/left tie hardly ever occurs once the diagonal is tried first.
 
+### Baseline timing (code ready; official numbers come from Colab)
+
+All official timings are taken on **Colab, in one session**, so the whole team uses the same environment and the CUDA timings can later be taken on the same machine. Local Windows runs are for development only and are not reported.
+
+* **What is timed** (per run, monotonic clock): `alloc` = `malloc` + zeroing the whole matrix (so the page faults are charged here, not to the fill; the zeroing goes through a volatile pointer because GCC otherwise turns `malloc` + `memset` into a lazy `calloc`), `fill` = `fill_matrix()` only, `traceback` = `traceback()` only, `total` = the three added. Reading the FASTA file and printing are not timed. The CUDA version should report its allocation / copies separately in the same way.
+* **How:** `sw_seq` has opt-in flags `--time`, `--repeat N`, `--warmup` (one extra run 0, excluded from the statistics) and `--csv` (machine-readable `CSV,...` lines). Without these flags the output is unchanged. The timer is `clock_gettime(CLOCK_MONOTONIC)` on Linux/Colab and `QueryPerformanceCounter` on Windows.
+* **Protocol** (`scripts/run_baseline.py`): warm-up + 5 timed runs for 1,000 and 5,000, warm-up + 3 for 10,000, each with and without the traceback; the script stops if any run does not reproduce the verified score, cell and checksum. It records the CPU, GPU, compiler, flags and date, and writes `results/week9_baseline.csv` and `results/week9_baseline.md`.
+* **Run it:** `colab/SW_Week9_Timing.ipynb` (GPU runtime, run all cells in order: environment, clone, build, correctness, sanitizers, timings, download).
+* **Status:** the program and scripts were tested on Windows only (development numbers: about 0.004 s, 0.10 s and 0.41 s fill for 1k / 5k / 10k on a laptop CPU, with the traceback below 0.0001 s; **not** the official baseline). The Linux timer branch was only compile-checked here, not run, because there is no local Linux environment.
+
 ### Not yet done
 
-* Baseline execution times (timer, repeated runs on `bench_1000/5000/10000`, machine / Colab session record, `results/`).
-* Sanitizer run (`-fsanitize=address,undefined`): the local MinGW 6.3 has no sanitizer libraries, so this has to be done on Colab or WSL.
-* Compile and run on Colab (`BRANCH = "build/week9-c-traceback"`, then `python3 scripts/check_c_week9.py` after building `bin/sw_seq`).
+* **Run `colab/SW_Week9_Timing.ipynb` on Colab and commit `results/week9_baseline.csv` and `.md`**, then copy the medians into this section.
+* Sanitizer run (`-fsanitize=address,undefined`): cell 5 of the notebook; the local MinGW 6.3 has no sanitizer libraries.
+* Confirm on Colab that `check_c_week8.py --all` and `check_c_week9.py --all` both end with `All C results match the reference.`
 
 ### Reproducing the Week 9 checks
 
@@ -151,6 +161,14 @@ From `smith-waterman/`, after building `bin\sw_seq.exe` as in the Week 8 section
 ```bat
 bin\sw_seq.exe data\test_gap.fasta --no-matrix       :: alignment, ranges, Re-score line
 python scripts\check_c_week9.py                       :: C traceback vs Python (add --all for bench_5000)
+bin\sw_seq.exe data\bench_1000.fasta --no-matrix --repeat 5 --warmup --csv   :: timing (development only)
+```
+
+On Colab (official timings), open `colab/SW_Week9_Timing.ipynb`, or from `smith-waterman/`:
+
+```bash
+gcc -std=c99 -O2 -Wall -Wextra -o bin/sw_seq c/sw_seq.c
+python3 scripts/run_baseline.py --exe bin/sw_seq      # writes results/week9_baseline.csv / .md
 ```
 
 ---
@@ -331,7 +349,9 @@ scripts/check_expected.py  independent Python check of the expected results
 scripts/check_c_week8.py   compares the C program with the Python reference (score, cell, matrix)
 scripts/check_c_week9.py   compares the C traceback with the Python reference (alignment, ranges, re-score)
 c/sw_seq.c                 sequential C baseline (Week 8: input, matrix filling, score tracking; Week 9: traceback)
+scripts/run_baseline.py    records the baseline C times (CSV + markdown summary in results/)
 colab/SW_Week7_Setup.ipynb Colab notebook: GPU / nvcc check, clone, validate inputs
+colab/SW_Week9_Timing.ipynb Colab notebook: build, correctness checks, sanitizers, baseline timings
 results/                   benchmark output goes here (Weeks 9 and 12)
 ```
 

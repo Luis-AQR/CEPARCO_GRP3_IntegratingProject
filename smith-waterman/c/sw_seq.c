@@ -23,8 +23,17 @@
  *     score (so the update uses a strict '>').
  *   - 32-bit integer scores.
  *
- * Plain standard C (C99): builds unchanged with MSVC (cl), MinGW-w64 gcc, or
- * any other C compiler. No POSIX functions are used.
+ * Week 9 timing (opt-in: --time, --repeat N, --warmup, --csv): each run is
+ * timed in three parts, with a monotonic clock:
+ *     alloc     malloc + zeroing of the whole matrix (forces the page faults)
+ *     fill      fill_matrix() only (the part CUDA parallelises)
+ *     traceback traceback() only
+ * total = alloc + fill + traceback. Reading the FASTA file and printing are not
+ * timed. Official timings are taken on Colab (Linux, clock_gettime); the
+ * Windows branch (QueryPerformanceCounter) is for local development.
+ *
+ * Plain standard C (C99): builds with MSVC (cl), MinGW-w64 gcc and Linux gcc.
+ * The only platform-specific code is the timer (now_seconds).
  *
  * Build (Windows, from smith-waterman/, one of):
  *     gcc -std=c99 -O2 -Wall -Wextra -o bin\sw_seq.exe c\sw_seq.c      (MinGW-w64)
@@ -38,12 +47,25 @@
 #define _CRT_SECURE_NO_WARNINGS /* MSVC: allow fopen/strcpy without warnings */
 #endif
 
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 199309L /* clock_gettime under -std=c99 on Linux */
+#endif
+
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <time.h>
+#endif
 
 /* Default scoring parameters */
 #define DEFAULT_MATCH 1    /* m  */
@@ -89,6 +111,21 @@ static int max4(int a, int b, int c, int d)
     if (c > m) m = c;
     if (d > m) m = d;
     return m;
+}
+
+/* Monotonic wall-clock time in seconds (only differences are meaningful). */
+static double now_seconds(void)
+{
+#ifdef _WIN32
+    LARGE_INTEGER freq, now;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&now);
+    return (double)now.QuadPart / (double)freq.QuadPart;
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+#endif
 }
 
 /* Matrix cell (i, j) in a flat array of (M+1) x (N+1) ints. */
@@ -425,8 +462,13 @@ static void usage(const char *prog)
 {
     fprintf(stderr,
             "usage: %s <input.fasta> [--no-matrix] [--no-traceback] [--match N] [--mismatch N] [--gap N]\n"
+            "                        [--time] [--repeat N] [--warmup] [--csv]\n"
             "  FASTA with exactly two records; sequence 1 runs down the rows.\n"
-            "  Defaults: match +%d, mismatch -%d, gap -%d (N must be a positive integer).\n",
+            "  Defaults: match +%d, mismatch -%d, gap -%d (N must be a positive integer).\n"
+            "  Timing (opt-in): --time prints the times of one run; --repeat N runs the\n"
+            "  fill + traceback N times and prints min/median/mean; --warmup adds one extra\n"
+            "  untimed-in-statistics run first (run 0); --csv also prints machine-readable\n"
+            "  'CSV,...' lines (one per run).\n",
             prog, DEFAULT_MATCH, DEFAULT_MISMATCH, DEFAULT_GAP);
 }
 
@@ -441,6 +483,47 @@ static int parse_positive(const char *text, int *out)
     return 0;
 }
 
+/* memset called through a volatile pointer so it cannot be optimised away or
+   merged with malloc into calloc (see the timed region in main). */
+static void *(*volatile zero_memory_fn)(void *, int, size_t) = memset;
+static void zero_memory(void *p, size_t n) { zero_memory_fn(p, 0, n); }
+
+/* Largest accepted value of --repeat. */
+#define MAX_REPEAT 1000
+
+/* Per-run times in seconds. */
+typedef struct {
+    double alloc, fill, trace, total;
+} RunTime;
+
+static int cmp_double(const void *x, const void *y)
+{
+    double a = *(const double *)x, b = *(const double *)y;
+    return (a > b) - (a < b);
+}
+
+/* min / median / mean of v[0..n-1] (v is sorted in place). */
+static void stats(double *v, int n, double *mn, double *med, double *mean)
+{
+    qsort(v, (size_t)n, sizeof(double), cmp_double);
+    double sum = 0.0;
+    for (int k = 0; k < n; k++) sum += v[k];
+    *mn = v[0];
+    *med = (n % 2) ? v[n / 2] : 0.5 * (v[n / 2 - 1] + v[n / 2]);
+    *mean = sum / n;
+}
+
+/* File name without directories and without a ".fasta" extension. */
+static void base_name(const char *path, char *out, size_t cap)
+{
+    const char *p = path, *s;
+    for (s = path; *s; s++)
+        if (*s == '/' || *s == '\\') p = s + 1;
+    snprintf(out, cap, "%s", p);
+    size_t n = strlen(out);
+    if (n > 6 && strcmp(out + n - 6, ".fasta") == 0) out[n - 6] = '\0';
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2 || strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
@@ -451,6 +534,7 @@ int main(int argc, char **argv)
     Scoring sc = {DEFAULT_MATCH, DEFAULT_MISMATCH, DEFAULT_GAP};
     int show_matrix = 1;
     int do_traceback = 1;
+    int repeat = 1, warmup = 0, want_csv = 0, want_time = 0;
     for (int k = 2; k < argc; k++) {
         int *target = NULL;
         if (strcmp(argv[k], "--no-matrix") == 0) {
@@ -459,6 +543,17 @@ int main(int argc, char **argv)
         } else if (strcmp(argv[k], "--no-traceback") == 0) {
             do_traceback = 0;
             continue;
+        } else if (strcmp(argv[k], "--time") == 0) {
+            want_time = 1;
+            continue;
+        } else if (strcmp(argv[k], "--warmup") == 0) {
+            warmup = 1;
+            continue;
+        } else if (strcmp(argv[k], "--csv") == 0) {
+            want_csv = 1;
+            continue;
+        } else if (strcmp(argv[k], "--repeat") == 0) {
+            target = &repeat;
         } else if (strcmp(argv[k], "--match") == 0) {
             target = &sc.match;
         } else if (strcmp(argv[k], "--mismatch") == 0) {
@@ -476,6 +571,11 @@ int main(int argc, char **argv)
         }
         k++;
     }
+    if (repeat > MAX_REPEAT) {
+        fprintf(stderr, "error: --repeat is limited to %d\n", MAX_REPEAT);
+        return 2;
+    }
+    const int show_timing = want_time || want_csv || warmup || repeat > 1;
 
     char *a = NULL, *b = NULL;
     if (read_fasta_pair(argv[1], &a, &b) != 0) return 1;
@@ -491,60 +591,127 @@ int main(int argc, char **argv)
 
     size_t cells = (size_t)(M + 1) * (size_t)(N + 1);
     double mb = (double)cells * sizeof(int) / (1024.0 * 1024.0);
-    int *H = (int *)calloc(cells, sizeof(int));
-    if (!H) {
-        fprintf(stderr, "error: cannot allocate %.1f MB for the matrix\n", mb);
-        free(a);
-        free(b);
-        return 1;
-    }
-
-    FillResult res = fill_matrix(a, M, b, N, H, sc);
-
-    printf("Smith-Waterman (sequential C)\n");
-    printf("File     : %s\n", argv[1]);
-    printf("Lengths  : M = %d (rows), N = %d (columns)\n", M, N);
-    printf("Scoring  : match +%d, mismatch -%d, gap -%d\n", sc.match, sc.mismatch, sc.gap);
-    printf("Matrix   : %llu cells, %.1f MB\n", (unsigned long long)cells, mb);
-
-    if (show_matrix && M <= PRINT_LIMIT && N <= PRINT_LIMIT)
-        print_matrix(b, N, a, M, H);
-    else if (show_matrix)
-        printf("(matrix not printed: larger than %d x %d)\n", PRINT_LIMIT, PRINT_LIMIT);
-
-    printf("\nMax score: %d\n", res.score);
-    if (res.score > 0)
-        printf("Max cell : H(%d, %d)\n", res.i, res.j);
-    else
-        printf("Max cell : none (no local alignment, every cell is 0)\n");
 
     int status = 0;
-    if (res.score > 0 && do_traceback) {
-        Alignment al;
-        if (traceback(a, b, M, N, H, sc, res.i, res.j, &al) != 0) {
+    int printed = 0;      /* the results are printed once, from the first run   */
+    FillResult first = {0, 0, 0, 0}; /* first run's result; later runs must equal it */
+    RunTime times[MAX_REPEAT + 1]; /* times[0] = warm-up run, times[1..] = timed */
+
+    for (int run = warmup ? 0 : 1; run <= repeat; run++) {
+        /* ---- timed region: allocation (+ zeroing), fill, traceback ---- */
+        double t0 = now_seconds();
+        int *H = (int *)malloc(cells * sizeof(int));
+        /* Zero through a volatile pointer: otherwise the compiler may turn
+           malloc+memset into a lazy calloc and the page faults would be
+           charged to the fill instead of the allocation. */
+        if (H) zero_memory(H, cells * sizeof(int)); /* row 0 / column 0 must be 0 */
+        double t1 = now_seconds();
+        if (!H) {
+            fprintf(stderr, "error: cannot allocate %.1f MB for the matrix\n", mb);
             status = 1;
-        } else {
-            printf("\n");
-            print_alignment(&al);
-            int rs = rescore_alignment(&al, a, b, sc);
-            if (rs == res.score) {
-                printf("Re-score : %d (OK)\n", rs);
-            } else {
-                if (rs == INT_MIN)
-                    printf("Re-score : malformed alignment (MISMATCH, expected %d)\n", res.score);
-                else
-                    printf("Re-score : %d (MISMATCH, expected %d)\n", rs, res.score);
-                status = 1;
-            }
-            free_alignment(&al);
+            break;
         }
-    } else if (res.score == 0 && do_traceback) {
-        printf("\nNo local alignment (every cell is 0), traceback skipped.\n");
+
+        FillResult res = fill_matrix(a, M, b, N, H, sc);
+        double t2 = now_seconds();
+
+        Alignment al;
+        int have_al = 0, tb_failed = 0;
+        if (res.score > 0 && do_traceback) {
+            if (traceback(a, b, M, N, H, sc, res.i, res.j, &al) == 0) have_al = 1;
+            else tb_failed = 1;
+        }
+        double t3 = now_seconds();
+        times[run].alloc = t1 - t0;
+        times[run].fill = t2 - t1;
+        times[run].trace = t3 - t2;
+        times[run].total = t3 - t0;
+        /* ---- end of timed region ---- */
+
+        if (tb_failed) status = 1;
+
+        if (!printed) {
+            first = res;
+            printed = 1;
+            printf("Smith-Waterman (sequential C)\n");
+            printf("File     : %s\n", argv[1]);
+            printf("Lengths  : M = %d (rows), N = %d (columns)\n", M, N);
+            printf("Scoring  : match +%d, mismatch -%d, gap -%d\n", sc.match, sc.mismatch, sc.gap);
+            printf("Matrix   : %llu cells, %.1f MB\n", (unsigned long long)cells, mb);
+
+            if (show_matrix && M <= PRINT_LIMIT && N <= PRINT_LIMIT)
+                print_matrix(b, N, a, M, H);
+            else if (show_matrix)
+                printf("(matrix not printed: larger than %d x %d)\n", PRINT_LIMIT, PRINT_LIMIT);
+
+            printf("\nMax score: %d\n", res.score);
+            if (res.score > 0)
+                printf("Max cell : H(%d, %d)\n", res.i, res.j);
+            else
+                printf("Max cell : none (no local alignment, every cell is 0)\n");
+
+            if (have_al) {
+                printf("\n");
+                print_alignment(&al);
+                int rs = rescore_alignment(&al, a, b, sc);
+                if (rs == res.score) {
+                    printf("Re-score : %d (OK)\n", rs);
+                } else {
+                    if (rs == INT_MIN)
+                        printf("Re-score : malformed alignment (MISMATCH, expected %d)\n", res.score);
+                    else
+                        printf("Re-score : %d (MISMATCH, expected %d)\n", rs, res.score);
+                    status = 1;
+                }
+            } else if (res.score == 0 && do_traceback) {
+                printf("\nNo local alignment (every cell is 0), traceback skipped.\n");
+            }
+            printf("Checksum : %llu (sum of all matrix cells)\n", res.checksum);
+        } else if (res.score != first.score || res.i != first.i || res.j != first.j ||
+                   res.checksum != first.checksum) {
+            fprintf(stderr, "error: run %d gave a different result than the first run\n", run);
+            status = 1;
+        }
+
+        if (have_al) free_alignment(&al);
+        free(H);
+        if (status != 0 && !printed) break;
     }
 
-    printf("Checksum : %llu (sum of all matrix cells)\n", res.checksum);
+    if (show_timing && printed) {
+        const int first_run = 1;
+        double v[MAX_REPEAT];
+        double mn, med, mean;
 
-    free(H);
+        printf("\nTiming   : %d run(s)%s; alloc = malloc + zeroing the matrix; reading and "
+               "printing not timed\n",
+               repeat, warmup ? " after 1 warm-up (run 0, not in the statistics)" : "");
+        printf("  %-4s %10s %10s %10s %10s   (seconds)\n", "run", "alloc", "fill", "traceback",
+               "total");
+        for (int run = warmup ? 0 : 1; run <= repeat; run++)
+            printf("  %-4d %10.6f %10.6f %10.6f %10.6f\n", run, times[run].alloc, times[run].fill,
+                   times[run].trace, times[run].total);
+
+        if (repeat >= 1) {
+            for (int k = 0; k < repeat; k++) v[k] = times[first_run + k].fill;
+            stats(v, repeat, &mn, &med, &mean);
+            printf("  fill      min %.6f  median %.6f  mean %.6f\n", mn, med, mean);
+            for (int k = 0; k < repeat; k++) v[k] = times[first_run + k].total;
+            stats(v, repeat, &mn, &med, &mean);
+            printf("  total     min %.6f  median %.6f  mean %.6f\n", mn, med, mean);
+        }
+
+        if (want_csv) {
+            char name[256];
+            base_name(argv[1], name, sizeof name);
+            printf("\nCSV,input,M,N,run,alloc_s,fill_s,traceback_s,total_s,score,cell_i,cell_j,checksum\n");
+            for (int run = warmup ? 0 : 1; run <= repeat; run++)
+                printf("CSV,%s,%d,%d,%d,%.6f,%.6f,%.6f,%.6f,%d,%d,%d,%llu\n", name, M, N, run,
+                       times[run].alloc, times[run].fill, times[run].trace, times[run].total,
+                       first.score, first.i, first.j, first.checksum);
+        }
+    }
+
     free(a);
     free(b);
     return status;
