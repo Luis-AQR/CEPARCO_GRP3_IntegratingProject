@@ -189,6 +189,12 @@ These are the values the CUDA version must reproduce in Weeks 10-11. Not done ye
 | 12 | Larger inputs, `nsys` profiling, speedup; tiled wavefront if launch overhead is high | timing tables, speedup, profiling notes |
 | 13 | Documentation and demo | final submission |
 
+## AI Declaration
+
+Claude was used as a helper tool in the analysis and breakdown of related literature and researches
+
+Copilot was used as a helper tool in the formatting of the README document
+
 ## Reference
 
 [1] T. F. Smith and M. S. Waterman, "Identification of common molecular subsequences,"
