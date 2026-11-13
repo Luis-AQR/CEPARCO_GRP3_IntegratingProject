@@ -1,5 +1,5 @@
 # Smith-Waterman: Full Alignment Reconstruction, C vs CUDA
-## Weekly Progress Report (through Week 8)
+## Weekly Progress Report (through Week 9, traceback)
 
 **Course:** Advanced Computer Architecture 1 (CEPARCO), Integrating Project
 **Group 3:** Alcasid, Aizy; Bilanes, Kendrick; Corpuz, Gerald; Roa, Luis
@@ -90,11 +90,68 @@ passage or an unrecognised malware variant.
 |------|-------------------------------|--------|
 | 7 | Finalise scoring parameters and test sequences; set up Colab notebook and GitHub repository | **Done** - Colab confirmed; merge into `main` still open, see *Open items* |
 | **8** | Sequential C: input reading, matrix filling, score tracking | **Done** (see *Week 8 report*) - C output matches the Python reference on all 6 inputs checked |
-| 9 | C traceback; record baseline execution times | Not started |
+| 9 | C traceback; record baseline execution times | **In progress** - C traceback done and verified (see *Week 9 report*); baseline timings not yet recorded |
 | 10 | Mid-project demo: C baseline + working CUDA matrix filling | Not started |
 | 11 | CUDA traceback and alignment reconstruction; compare with C | Not started |
 | 12 | Larger inputs, `nsys` profiling, speedup; tiled wavefront if launch overhead is high | Not started |
 | 13 | Documentation and demo | Not started |
+
+---
+
+## Week 9 report (traceback done; baseline timings still to do)
+
+**Milestone:** C traceback; record baseline execution times.
+**Deliverable:** verified C program with traceback (done), and baseline execution times (not yet done).
+
+### What was done (traceback)
+
+| # | Task | Result |
+|---|------|--------|
+| 1 | Traceback | `traceback()` starts at the best cell and follows diagonal, then up, then left, until a 0. Moves are recomputed from `H` and the sequences, so no direction matrix is stored. The aligned strings are built backwards in buffers of `M + N + 1`. |
+| 2 | Alignment output | Prints the length (matches / mismatches / gaps), the 1-based ranges `a[i1..i2]`, `b[j1..j2]`, and the aligned pair in 60-column blocks with match bars. |
+| 3 | Independent re-score | `rescore_alignment()` scores the aligned strings only (it does not read `H`), and checks that the un-gapped strings equal `a[i1..i2]` and `b[j1..j2]`. The program prints `Re-score : <n> (OK)` and exits with 1 if it differs from the max score. |
+| 4 | Flags | `--no-traceback` gives exactly the Week 8 output (checked against the Week 8 build on `test_paper`, `test_nomatch`, `bench_1000`). |
+| 5 | Verification script | `scripts/check_c_week9.py` runs `sw_seq` and compares score, cell, aligned strings and ranges with the Python traceback in `check_expected.py` (same priority), and re-scores the parsed strings in Python. |
+
+### Results
+
+Scoring +1 / -1 / -2. Every alignment re-scores to the max score.
+
+| File | Max score at cell | Range | Alignment | Re-score |
+|------|-------------------|-------|-----------|----------|
+| `test_paper` | 3 at H(4,5) | a[2..4], b[3..5] | `GCT` / `GCT` | 3 OK |
+| `test_identical` | 8 at H(8,8) | a[1..8], b[1..8] | whole 8-mers | 8 OK |
+| `test_nomatch` | 0, no cell | n/a | "No local alignment", traceback skipped | n/a |
+| `test_gap` | 10 at H(12,13) | a[1..12], b[1..13] | `ACGTCA-TGCATG` / `ACGTCACTGCATG` | 10 OK |
+| `bench_1000` | 160 at H(784,995) | a[566..784], b[776..995] | length 225 (198 matches, 16 mismatches, 11 gaps) | 160 OK |
+| `bench_5000` | 805 at H(2313,1448) | a[1298..2313], b[439..1448] | length 1043 (954 matches, 29 mismatches, 60 gaps) | 805 OK |
+| `bench_10000` | 1536 at H(5403,9807) | a[3387..5403], b[7808..9807] | length 2069 (1863 matches, 85 mismatches, 121 gaps) | 1536 OK (C only) |
+
+`check_c_week9.py --all` ends with `All C results match the reference.` (strings and ranges equal the
+Python traceback on all five inputs it covers); `check_c_week8.py --all` still passes, so the fill and
+checksums are unchanged. Custom scoring also re-scores correctly (`test_gap --match 2 --mismatch 1
+--gap 3`: 21; `bench_1000 --match 3 --mismatch 2 --gap 1`: 1337).
+
+### Technical decisions
+
+* **Priority** diagonal, then up (gap in b), then left (gap in a); the CUDA traceback (Week 11) must use the same order.
+* **Validity** is judged by the re-score and the coordinates. String equality with the Python reference is also checked because both sides use the same fixed priority.
+* **Checks can fail.** A scratch build whose traceback prefers up over diagonal on a tie was caught by `check_c_week9.py` on `bench_1000` (strings differ, re-score still OK); a wrong gap penalty in the re-score was caught as `MISMATCH`. Swapping only up and left changed nothing on these inputs, because an up/left tie hardly ever occurs once the diagonal is tried first.
+
+### Not yet done
+
+* Baseline execution times (timer, repeated runs on `bench_1000/5000/10000`, machine / Colab session record, `results/`).
+* Sanitizer run (`-fsanitize=address,undefined`): the local MinGW 6.3 has no sanitizer libraries, so this has to be done on Colab or WSL.
+* Compile and run on Colab (`BRANCH = "build/week9-c-traceback"`, then `python3 scripts/check_c_week9.py` after building `bin/sw_seq`).
+
+### Reproducing the Week 9 checks
+
+From `smith-waterman/`, after building `bin\sw_seq.exe` as in the Week 8 section:
+
+```bat
+bin\sw_seq.exe data\test_gap.fasta --no-matrix       :: alignment, ranges, Re-score line
+python scripts\check_c_week9.py                       :: C traceback vs Python (add --all for bench_5000)
+```
 
 ---
 
@@ -272,7 +329,8 @@ data/                      test_*.fasta (hand-checkable) and bench_*.fasta (1k /
 scripts/gen_sequences.py   reproducible generator for the benchmark inputs
 scripts/check_expected.py  independent Python check of the expected results
 scripts/check_c_week8.py   compares the C program with the Python reference (score, cell, matrix)
-c/sw_seq.c                 sequential C baseline (Week 8: input, matrix filling, score tracking)
+scripts/check_c_week9.py   compares the C traceback with the Python reference (alignment, ranges, re-score)
+c/sw_seq.c                 sequential C baseline (Week 8: input, matrix filling, score tracking; Week 9: traceback)
 colab/SW_Week7_Setup.ipynb Colab notebook: GPU / nvcc check, clone, validate inputs
 results/                   benchmark output goes here (Weeks 9 and 12)
 ```
