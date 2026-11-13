@@ -91,7 +91,7 @@ passage or an unrecognised malware variant.
 | 7 | Finalise scoring parameters and test sequences; set up Colab notebook and GitHub repository | **Done** - Colab confirmed; merged into `main` |
 | **8** | Sequential C: input reading, matrix filling, score tracking | **Done** (see *Week 8 report*) - C output matches the Python reference on all 6 inputs checked |
 | 9 | C traceback; record baseline execution times | **Done** - C traceback verified against the Python reference; baseline times recorded on Colab (T4 session, 13 Nov 2026), and the Colab correctness and sanitizer checks passed (see *Week 9 report*) |
-| 10 | Mid-project demo: C baseline + working CUDA matrix filling | Started - Doing demo  |
+| 10 | Mid-project demo: C baseline + working CUDA matrix filling | **Done** - CUDA Matrix filling and Demo |
 | 11 | CUDA traceback and alignment reconstruction; compare with C | Not started |
 | 12 | Larger inputs, `nsys` profiling, speedup; tiled wavefront if launch overhead is high | Not started |
 | 13 | Documentation and demo | Not started |
@@ -99,7 +99,7 @@ passage or an unrecognised malware variant.
 ---
 
 ## Mid-project Video Demo and PPT
-Video Demo:
+Video Demo: https://drive.google.com/file/d/1oX8Yn2ChGQtHUBQ02EoN5NlSAoPRj2Sp/view?usp=sharing
 PPT: https://canva.link/hcmo1tbl0zlwjjb
 
 ---
@@ -153,7 +153,7 @@ Scoring +1 / -1 / -2. Every alignment re-scores to the max score perfectly, conf
 
 ### Open items
 
-- [ ] Present mid-project demo (Matrix filling comparison).
+- [X] Present mid-project demo (Matrix filling comparison).
 - [x] Merge the Week 10 branch into `main`.
 
 ### Reproducing the Week 10 checks
