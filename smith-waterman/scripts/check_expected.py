@@ -10,7 +10,7 @@ Scoring (finalised): match +1, mismatch -1, gap -2 (linear).
 Traceback priority: diagonal > up > left (as in the proposal's pseudocode).
 Maximum cell: first one in row-major order (strict '>').
 
-Usage:  python scripts\\check_expected.py          (run from the repo root)
+Usage:  python scripts\\check_expected.py (run from the repo root)
 """
 import os
 import sys
@@ -65,7 +65,7 @@ def smith_waterman(a, b):
     return H, best, (bi, bj), start, al_a, al_b
 
 
-# Values derived by hand from the recurrence (see README, "Test sequences").
+# Values derived by hand from the recurrence (see README: "Test sequences" under week 7).
 EXPECTED = {
     "test_paper.fasta": dict(
         score=3, end=(4, 5), start=(2, 3), a="GCT", b="GCT",
