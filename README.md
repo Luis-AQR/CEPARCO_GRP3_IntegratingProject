@@ -200,8 +200,9 @@ results/                   benchmark output goes here (Weeks 9 and 12)
 
 ```bash
 python3 scripts/check_expected.py                      # expect: All checks passed.
-python3 scripts/gen_sequences.py --length 10000 --seed 1 --out /tmp/b10k.fasta
-cmp /tmp/b10k.fasta data/bench_10000.fasta && echo identical
+python scripts\gen_sequences.py --length 10000 --seed 1 --out b10k.fasta
+fc b10k.fasta data\bench_10000.fasta
+del b10k.fasta
 ```
 
 Or open `colab/SW_Week7_Setup.ipynb` in Google Colab with a GPU runtime and run all cells.
