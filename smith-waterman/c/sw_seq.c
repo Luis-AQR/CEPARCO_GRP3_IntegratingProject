@@ -22,9 +22,9 @@
  * Plain standard C (C99): builds unchanged with MSVC (cl), MinGW-w64 gcc, or
  * any other C compiler. No POSIX functions are used.
  *
- * Build (Windows, from the repository root):
- *     build.bat                 (picks cl or gcc automatically)
- *     build.bat debug           (debug symbols, no optimisation)
+ * Build (Windows, from smith-waterman/, one of):
+ *     gcc -std=c99 -O2 -Wall -Wextra -o bin\sw_seq.exe c\sw_seq.c      (MinGW-w64)
+ *     cl /nologo /O2 /W4 /Fobin\ /Febin\sw_seq.exe c\sw_seq.c          (MSVC)
  * Run:
  *     bin\sw_seq.exe data\test_paper.fasta
  *     bin\sw_seq.exe data\bench_1000.fasta --no-matrix
