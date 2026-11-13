@@ -98,7 +98,13 @@ passage or an unrecognised malware variant.
 
 ---
 
-## Week 10 report (completed)
+## Mid-project Video Demo and PPT
+Video Demo:
+PPT: https://canva.link/hcmo1tbl0zlwjjb
+
+---
+
+## Week 10 Report (Completed)
 
 **Milestone:** Mid-project demo: C baseline + working CUDA matrix filling.
 **Deliverable:** Verified CUDA program with matrix filling, max score reduction, and timing, integrated into Colab (`sw_cuda.cu`, `colab/sw_cuda.ipynb`).
@@ -149,7 +155,6 @@ Scoring +1 / -1 / -2. Every alignment re-scores to the max score perfectly, conf
 
 - [ ] Present mid-project demo (Matrix filling comparison).
 - [x] Merge the Week 10 branch into `main`.
-- [ ] Calculate the exact speedup multipliers (C total vs CUDA total; C fill vs CUDA fill) to update the documentation.
 
 ### Reproducing the Week 10 checks
 
@@ -316,11 +321,10 @@ were recorded this week (planned for Week 9).
 
 ### Open items
 
-- [ ] Run `check_c_week8.py` on Windows with your compiler and confirm it ends with `All C results match the reference.`
-- [ ] Compile and run `sw_seq` on Colab (step 7 of the notebook); the Week 8 results above were produced locally
+- [X] Run `check_c_week8.py` on Windows with your compiler and confirm it ends with `All C results match the reference.`
+- [X] Compile and run `sw_seq` on Colab (step 7 of the notebook); the Week 8 results above were produced locally
 - [x] Merge the Week 7 and Week 8 branches into `main` (done, both are in `main`)
-- [ ] Update Figures 7 and 8 in the proposal (H(4,2) = 1)
-- [ ] Move the 23 MB pitch video out of the repository (`git rm --cached "CEPARCO Integrating Project Pitch.mp4"`) and link it here: `<video link>`
+- [X] Update Figures 7 and 8 in the proposal (H(4,2) = 1)
 
 ### Plan for Week 9
 
@@ -420,7 +424,7 @@ Expected score matrix for `test_paper.fasta`:
 - [x] Colab environment recorded (12 Nov 2026): Tesla T4 (15360 MiB), driver 580.82.07, CUDA 13.0 (`nvcc` 13.0.88), Python 3.13.16, gcc 13.3.0
 - [x] `check_expected.py` prints `All checks passed.` and the CUDA smoke test prints `-> OK` on Colab
 - [x] Merge `build/week7-requirements` into `main` (done)
-- [ ] Update Figures 7 and 8 in the proposal (H(4,2) = 1)
+- [X] Update Figures 7 and 8 in the proposal (H(4,2) = 1)
 - [ ] Optional: flatten the repository layout
 
 ### Risks and notes
