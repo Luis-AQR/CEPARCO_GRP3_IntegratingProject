@@ -1,5 +1,5 @@
 # Smith-Waterman: Full Alignment Reconstruction, C vs CUDA
-## Weekly Progress Report
+## Weekly Progress Report (through Week 8)
 
 **Course:** Advanced Computer Architecture 1 (CEPARCO), Integrating Project
 **Group 3:** Alcasid, Aizy; Bilanes, Kendrick; Corpuz, Gerald; Roa, Luis
@@ -88,8 +88,8 @@ passage or an unrecognised malware variant.
 
 | Week | Milestone (from the proposal) | Status |
 |------|-------------------------------|--------|
-| **7** | Finalise scoring parameters and test sequences; set up Colab notebook and GitHub repository | **Done** (this report) - 3 confirmations still open, see *Open items* |
-| 8 | Sequential C: input reading, matrix filling, score tracking | Not started |
+| 7 | Finalise scoring parameters and test sequences; set up Colab notebook and GitHub repository | **Done** - 3 Colab/merge confirmations still open, see *Open items* |
+| **8** | Sequential C: input reading, matrix filling, score tracking | **Done** (see *Week 8 report*) - C output matches the Python reference on all 6 inputs checked |
 | 9 | C traceback; record baseline execution times | Not started |
 | 10 | Mid-project demo: C baseline + working CUDA matrix filling | Not started |
 | 11 | CUDA traceback and alignment reconstruction; compare with C | Not started |
@@ -98,7 +98,88 @@ passage or an unrecognised malware variant.
 
 ---
 
-## Week 7 report
+## Week 8 report
+
+**Milestone:** sequential C: input reading, matrix filling, score tracking.
+**Deliverable:** a working C program that outputs the score matrix and the maximum score (`c/sw_seq.c`).
+
+### What was done
+
+| # | Task | Result |
+|---|------|--------|
+| 1 | FASTA reader | `read_fasta_pair()` accepts exactly two records, upper-cases letters, handles multi-line records, blank lines and CRLF, and rejects non-letters, missing/extra records and empty sequences with an error message. |
+| 2 | Matrix filling | `fill_matrix()` computes `H(i,j) = max(0, diag, up, left)` row by row with the Week 7 scoring (+1 / -1 / -2). The matrix is `calloc`-ed, so row 0 and column 0 are the required 0s. |
+| 3 | Score tracking | Maximum score and its cell are updated with a strict `>`, so the reported cell is the **first** maximum in row-major order (the shared C/CUDA convention). If every cell is 0 the program reports "no local alignment". |
+| 4 | Output | Prints file, lengths, scoring, matrix size in MB, the full matrix for inputs up to 40 x 40, then `Max score` and `Max cell`. `--no-matrix` suppresses the matrix. |
+| 5 | Verification against the Python reference | `scripts/check_c_week8.py` runs the compiled program and compares score and best cell with `check_expected.py` on `test_paper`, `test_identical`, `test_nomatch`, `test_gap`, `bench_1000` and (with `--all`) `bench_5000`; the full matrix is compared for the four small tests. |
+
+### Results
+
+Scoring +1 / -1 / -2. Every row below was produced by `sw_seq`; "Python" is the independent reference.
+
+| File | Size (M x N) | Matrix | C: max score at cell | Python: score at cell | Match |
+|------|--------------|--------|----------------------|-----------------------|-------|
+| `test_paper` | 4 x 5 | 30 cells | **3** at H(4,5) | 3 at (4,5) | yes (matrix compared) |
+| `test_identical` | 8 x 8 | 81 cells | **8** at H(8,8) | 8 at (8,8) | yes (matrix compared) |
+| `test_nomatch` | 8 x 8 | 81 cells | **0**, no cell | 0 at (0,0) | yes (matrix compared) |
+| `test_gap` | 12 x 13 | 182 cells | **10** at H(12,13) | 10 at (12,13) | yes (matrix compared) |
+| `bench_1000` | 1,000 x 1,000 | 3.8 MB | **160** at H(784,995) | 160 at (784,995) | yes |
+| `bench_5000` | 5,000 x 5,000 | 95.4 MB | **805** at H(2313,1448) | 805 at (2313,1448) | yes |
+| `bench_10000` | 10,000 x 10,000 | 381.5 MB | **1536** at H(5403,9807) | not run (pure Python is too slow) | C only |
+
+The `test_paper` matrix printed by the C program is identical to the expected matrix in the
+*Test sequences* section below, including H(4,2) = 1.
+
+These scores and cells are the values the CUDA version must reproduce in Week 10-11. No timings
+were recorded this week (planned for Week 9).
+
+### Technical decisions
+
+* **Row-major, single pass.** Cells are computed in the order the traceback and the CUDA
+  comparison need; no optimisation beyond `-O2` since this is the baseline for the speedup.
+* **Full matrix in memory** (`int`, 4 bytes per cell), as planned for traceback: 381.5 MB at 10,000 x 10,000.
+* **Size guard.** Sequences longer than 46,000 are rejected so `(M+1) x (N+1) x 4` bytes stays under about 8 GB, and an allocation failure is reported instead of crashing.
+* **Scoring constants** (`MATCH_SCORE`, `MISMATCH_PEN`, `GAP_PEN`) are `#define`s at the top of the file so the CUDA code can use the same values.
+
+### Limitations / not yet done
+
+* No traceback, so no aligned strings or alignment coordinates yet (Week 9).
+* No timing code yet; baseline times come in Week 9.
+* `bench_10000` was run in C only. The matrix comparison is limited to inputs up to 40 x 40; larger inputs are compared by score and cell.
+* `bench_5000` is only checked when `check_c_week8.py` is run with `--all`.
+
+### Open items (carried over from Week 7)
+
+- [ ] Run the last cell of `SW_Week7_Setup.ipynb` and record the Colab environment: GPU `<model>`, driver `<version>`, CUDA `<version>`
+- [ ] Confirm `check_expected.py` prints `All checks passed.` and the CUDA smoke test prints `-> OK` on Colab
+- [ ] Compile and run `sw_seq` on Colab (the Week 8 results above were produced locally with gcc)
+- [ ] Merge the Week 7 and Week 8 branches into `main`
+- [ ] Update Figures 7 and 8 in the proposal (H(4,2) = 1)
+- [ ] Optional: flatten the repository layout (see Week 7, issue 3); move the 23 MB pitch video out of the repository
+
+### Plan for Week 9
+
+**Deliverable:** verified C program with traceback, and baseline execution times.
+
+* add traceback from the best cell to a 0 (diagonal, then up, then left)
+* print the aligned pair and its coordinates; re-score the alignment to confirm it equals the max score
+* check against the expected alignments (`test_paper`: `GCT` / `GCT`; `test_gap`: `ACGTCA-TGCATG` / `ACGTCACTGCATG`)
+* time the matrix fill on `bench_1000/5000/10000` with repeated runs, and record the machine/GPU session
+
+### Reproducing the Week 8 checks
+
+From `smith-waterman/`:
+
+```bash
+gcc -O2 -Wall -Wextra -o c/sw_seq c/sw_seq.c
+./c/sw_seq data/test_paper.fasta                 # matrix + max score 3 at H(4, 5)
+./c/sw_seq data/bench_10000.fasta --no-matrix    # score and cell only
+python3 scripts/check_c_week8.py                 # C vs Python reference (add --all for bench_5000)
+```
+
+---
+
+## Week 7 report (completed)
 
 **Milestone:** finalise scoring parameters and test sequences; set up the Colab notebook and GitHub repository.
 **Deliverable:** GitHub repository with README and sample input files.
@@ -163,7 +244,7 @@ Expected score matrix for `test_paper.fasta`:
 2. **Colab notebook bug.** The benchmark-regeneration cell used a `for` loop with `!` shell commands; Colab did not expand the loop variable, so the generator received an empty `--length` and every file was wrongly reported as `DIFFERENT`. *Fix:* the cell is now a `%%bash` cell; all three files report `identical`.
 3. **Repository layout.** The project folder was copied into the repository as `smith-waterman/smith-waterman/`, so `scripts/check_expected.py` was not found from the clone root. *Fix:* the notebook now locates the project root automatically. *Recommended:* flatten the layout so `data/`, `scripts/`, `colab/` sit at the repository root.
 
-### Open items to close Week 7
+### Open items to close Week 7 (still open, tracked under Week 8)
 
 - [ ] Run the last notebook cell and record the Colab environment: GPU `<model>`, driver `<version>`, CUDA `<version>`
 - [ ] Confirm `check_expected.py` prints `All checks passed.` and the CUDA smoke test prints `-> OK` on Colab
@@ -171,27 +252,21 @@ Expected score matrix for `test_paper.fasta`:
 - [ ] Update Figures 7 and 8 in the proposal (H(4,2) = 1)
 - [ ] Optional: flatten the repository layout; consider moving the 23 MB pitch video out of the repository, since every Colab clone downloads it
 
-### Plan for Week 8
-
-**Deliverable:** a working C program that outputs the score matrix and the maximum score.
-
-* read and validate the FASTA input
-* fill the matrix row by row and track the maximum score and its cell
-* print the matrix for small inputs
-* check against the expected values in this report (`test_paper`: matrix above, score 3 at H(4,5); `test_identical`: 8; `test_nomatch`: 0; `test_gap`: 10 at H(12,13))
-
 ### Risks and notes
 
 * **Colab GPU varies** between sessions (usually a T4). The GPU model is recorded with every set of timings, and all final timings come from a single session so C and CUDA run on the same machine.
 * **Memory:** the full matrix is stored for traceback (about 380 MB at 10,000 x 10,000), so larger inputs are limited by GPU memory.
+* **Baseline is correct but untimed.** The C score/cell results are verified (Week 8); timings are recorded in Week 9.
 * **Speedup is not yet known.** One kernel launch per anti-diagonal adds launch overhead; the tiled wavefront approach is the planned fallback in Week 12 if profiling shows it limits speedup.
 
-## Repository contents (as of Week 7)
+## Repository contents (as of Week 8)
 
 ```
 data/                      test_*.fasta (hand-checkable) and bench_*.fasta (1k / 5k / 10k)
 scripts/gen_sequences.py   reproducible generator for the benchmark inputs
 scripts/check_expected.py  independent Python check of the expected results
+scripts/check_c_week8.py   compares the C program with the Python reference (score, cell, matrix)
+c/sw_seq.c                 sequential C baseline (Week 8: input, matrix filling, score tracking)
 colab/SW_Week7_Setup.ipynb Colab notebook: GPU / nvcc check, clone, validate inputs
 results/                   benchmark output goes here (Weeks 9 and 12)
 ```
@@ -205,6 +280,7 @@ cmp /tmp/b10k.fasta data/bench_10000.fasta && echo identical
 ```
 
 Or open `colab/SW_Week7_Setup.ipynb` in Google Colab with a GPU runtime and run all cells.
+The Week 8 commands are listed under *Reproducing the Week 8 checks*.
 
 ## References
 
