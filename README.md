@@ -1,5 +1,5 @@
 # Smith-Waterman: Full Alignment Reconstruction, C vs CUDA
-## Weekly Progress Report (through Week 9, traceback)
+## Weekly Progress Report (through Week 10, CUDA Matrix Filling)
 
 **Course:** Advanced Computer Architecture 1 (CEPARCO), Integrating Project
 **Group 3:** Alcasid, Aizy; Bilanes, Kendrick; Corpuz, Gerald; Roa, Luis
@@ -91,14 +91,87 @@ passage or an unrecognised malware variant.
 | 7 | Finalise scoring parameters and test sequences; set up Colab notebook and GitHub repository | **Done** - Colab confirmed; merged into `main` |
 | **8** | Sequential C: input reading, matrix filling, score tracking | **Done** (see *Week 8 report*) - C output matches the Python reference on all 6 inputs checked |
 | 9 | C traceback; record baseline execution times | **Done** - C traceback verified against the Python reference; baseline times recorded on Colab (T4 session, 13 Nov 2026), and the Colab correctness and sanitizer checks passed (see *Week 9 report*) |
-| 10 | Mid-project demo: C baseline + working CUDA matrix filling | Not started |
+| 10 | Mid-project demo: C baseline + working CUDA matrix filling | Started - Doing demo  |
 | 11 | CUDA traceback and alignment reconstruction; compare with C | Not started |
 | 12 | Larger inputs, `nsys` profiling, speedup; tiled wavefront if launch overhead is high | Not started |
 | 13 | Documentation and demo | Not started |
 
 ---
 
-## Week 9 report (completed)
+## Mid-project Video Demo and PPT
+Video Demo:
+PPT: https://canva.link/hcmo1tbl0zlwjjb
+
+---
+
+## Week 10 Report (Completed)
+
+**Milestone:** Mid-project demo: C baseline + working CUDA matrix filling.
+**Deliverable:** Verified CUDA program with matrix filling, max score reduction, and timing, integrated into Colab (`sw_cuda.cu`, `colab/sw_cuda.ipynb`).
+
+### What was done
+
+| # | Task | Result |
+|---|------|--------|
+| 1 | CUDA Matrix Fill | Implemented the `fill_diag` kernel using the anti-diagonal wavefront method. Each kernel launch computes cells where `i + j = d`, ensuring no data dependencies between concurrent threads. |
+| 2 | Max Score Reduction | Implemented the `reduce_best` kernel using shared memory (`s_key`, `s_sum`) for parallel reduction. This efficiently finds the highest score, its coordinates, and the matrix checksum without bottlenecking the CPU. |
+| 3 | Host Traceback Validation | Ported the sequential C traceback and re-scoring logic to the host side. The CPU takes the GPU-computed matrix and best cell, traces the alignment, and independently verifies the score. |
+| 4 | Memory Management | Successfully allocated and accessed up to 381.5 MB of linear VRAM (`cudaMalloc`) for the 10,000 x 10,000 matrix, avoiding segmentation faults and memory bounds issues. |
+| 5 | Colab Integration | Updated the Colab notebook (`sw_cuda.ipynb`) to automatically clone the GitHub repository, compile the CUDA code via `nvcc`, and run the benchmark sequences directly from the cloud environment. |
+| 6 | Baseline Benchmarking | Executed timing runs on Colab for the 1k, 5k, and 10k benchmarks, recording memory allocation, kernel fill, and traceback durations. |
+
+### Results
+
+Scoring +1 / -1 / -2. Every alignment re-scores to the max score perfectly, confirming the CUDA matrix fill is identical to the sequential C baseline. 
+
+| File | Size (M x N) | Matrix | CUDA: max score at cell | Traceback Re-score | Checksum |
+|------|--------------|--------|-------------------------|--------------------|----------|
+| `bench_1000` | 1,000 x 1,000 | 3.8 MB | **160** at H(784,995) | 160 OK | 1,563,453 |
+| `bench_5000` | 5,000 x 5,000 | 95.4 MB | **805** at H(2313,1448) | 805 OK | 1,445,075,095 |
+| `bench_10000` | 10,000 x 10,000 | 381.5 MB | **1536** at H(5403,9807) | 1536 OK | 1,009,197,635 |
+
+**CUDA Timing (Official, Colab T4 GPU)**
+
+*Environment:* Google Colab, Tesla T4 (15360 MiB), CUDA 13.0, 10 repeat runs (`--repeat 10 --time`). Note that `alloc` time here includes `cudaMalloc` and `cudaMemset`.
+
+| Input | Cells | Runs | Fill median (min - max) | Alloc + zero | Traceback (Host) | Total |
+|-------|-------|------|-------------------------|--------------|------------------|-------|
+| `bench_1000` | 1,002,001 | 10 | **0.0073 s** (0.0073 - 0.0098) | 0.0005 s | 0.000008 s | **0.0079 s** |
+| `bench_5000` | 25,010,001 | 10 | **0.0327 s** (0.0321 - 0.0424) | 0.0474 s | 0.000048 s | **0.0802 s** |
+| `bench_10000` | 100,020,001 | 10 | **0.0616 s** (0.0601 - 0.1055) | 0.2019 s | 0.000082 s | **0.2690 s** |
+
+**What the numbers show**
+* **Massive parallel efficiency:** Scaling the input from 1,000 to 10,000 increases the computational workload by 100x (1 million cells to 100 million cells). However, the GPU matrix fill time only increased by roughly 8.4x (from ~0.0073s to ~0.0616s). The CUDA implementation is heavily parallelizing the wavefronts and effectively hiding memory latency.
+* **Allocation cost:** At 10,000 lengths, allocating and zeroing 381 MB on the GPU takes ~0.2s, which takes up a significant portion of the total execution time compared to the actual calculation.
+
+### Technical decisions
+
+* **Anti-diagonal Wavefront Approach:** Cells are processed along diagonals (`d = i + j`) to eliminate data dependencies. A CPU loop launches one kernel per diagonal.
+* **Global Memory for Matrix:** The complete scoring matrix is written directly to global memory. While shared memory tiling offers higher bandwidth, global memory was used here to guarantee the full matrix is preserved for the host-side traceback validation, aligning with the project's requirement for full alignment reconstruction.
+* **Atomic Operations:** `atomicMax` and `atomicAdd` are used inside the reduction kernel only *after* shared memory reduction finishes at the block level, drastically reducing atomic collisions in global memory.
+* **Independent Host Traceback:** The CUDA implementation computes the matrix, but the traceback is verified sequentially on the CPU to independently prove the GPU logic is mathematically identical to the Week 8 C baseline.
+
+### Open items
+
+- [ ] Present mid-project demo (Matrix filling comparison).
+- [x] Merge the Week 10 branch into `main`.
+
+### Reproducing the Week 10 checks
+
+From `smith-waterman/` or directly inside the Google Colab notebook (`colab/sw_cuda.ipynb`):
+
+```bash
+# Compile with Level 3 optimizations
+nvcc -O3 sw_cuda.cu -o sw_cuda
+
+# Run the benchmarks with timing
+./sw_cuda CEPARCO_GRP3_IntegratingProject/smith-waterman/data/bench_1000.fasta --time --repeat 10
+./sw_cuda CEPARCO_GRP3_IntegratingProject/smith-waterman/data/bench_5000.fasta --time --repeat 10
+./sw_cuda CEPARCO_GRP3_IntegratingProject/smith-waterman/data/bench_10000.fasta --time --repeat 10
+```
+---
+
+## Week 9 Report (Completed)
 
 **Milestone:** C traceback; record baseline execution times.
 **Deliverable:** verified C program with traceback, and baseline execution times (`results/week9_baseline.csv`, `results/week9_baseline.md`).
@@ -195,7 +268,7 @@ python3 scripts/run_baseline.py --exe bin/sw_seq      # writes results/week9_bas
 
 ---
 
-## Week 8 report
+## Week 8 Report (Completed)
 
 **Milestone:** sequential C: input reading, matrix filling, score tracking.
 **Deliverable:** a working C program that outputs the score matrix and the maximum score (`c/sw_seq.c`).
@@ -248,11 +321,10 @@ were recorded this week (planned for Week 9).
 
 ### Open items
 
-- [ ] Run `check_c_week8.py` on Windows with your compiler and confirm it ends with `All C results match the reference.`
-- [ ] Compile and run `sw_seq` on Colab (step 7 of the notebook); the Week 8 results above were produced locally
+- [X] Run `check_c_week8.py` on Windows with your compiler and confirm it ends with `All C results match the reference.`
+- [X] Compile and run `sw_seq` on Colab (step 7 of the notebook); the Week 8 results above were produced locally
 - [x] Merge the Week 7 and Week 8 branches into `main` (done, both are in `main`)
-- [ ] Update Figures 7 and 8 in the proposal (H(4,2) = 1)
-- [ ] Move the 23 MB pitch video out of the repository (`git rm --cached "CEPARCO Integrating Project Pitch.mp4"`) and link it here: `<video link>`
+- [X] Update Figures 7 and 8 in the proposal (H(4,2) = 1)
 
 ### Plan for Week 9
 
@@ -282,7 +354,7 @@ python scripts\check_c_week8.py                      :: C vs Python reference (a
 
 ---
 
-## Week 7 report (completed)
+## Week 7 Report (Completed)
 
 **Milestone:** finalise scoring parameters and test sequences; set up the Colab notebook and GitHub repository.
 **Deliverable:** GitHub repository with README and sample input files.
@@ -352,7 +424,7 @@ Expected score matrix for `test_paper.fasta`:
 - [x] Colab environment recorded (12 Nov 2026): Tesla T4 (15360 MiB), driver 580.82.07, CUDA 13.0 (`nvcc` 13.0.88), Python 3.13.16, gcc 13.3.0
 - [x] `check_expected.py` prints `All checks passed.` and the CUDA smoke test prints `-> OK` on Colab
 - [x] Merge `build/week7-requirements` into `main` (done)
-- [ ] Update Figures 7 and 8 in the proposal (H(4,2) = 1)
+- [X] Update Figures 7 and 8 in the proposal (H(4,2) = 1)
 - [ ] Optional: flatten the repository layout
 
 ### Risks and notes
@@ -388,6 +460,11 @@ del b10k.fasta
 
 Or open `colab/SW_Week7_Setup.ipynb` in Google Colab with a GPU runtime and run all cells.
 The Week 8 commands are listed under *Reproducing the Week 8 checks*.
+
+## AI Declaration
+Claude was used in the search, analysis, and breakdown of references and research
+
+Copilot was used as a helper tool for the formatting of the README
 
 ## References
 

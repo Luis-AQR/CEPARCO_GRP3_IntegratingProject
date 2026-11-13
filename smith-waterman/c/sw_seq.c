@@ -2,9 +2,16 @@
  * sw_seq.c - Sequential Smith-Waterman (Week 8 fill + Week 9 traceback)
  * CEPARCO Integrating Project, Group 3
  *
+ * This implementation builds on the local-alignment method introduced by
+ * Smith and Waterman (1981), as presented in the project proposal. Its scoring
+ * recurrence and conventions were established through the team's prior
+ * research, worked examples, and Week 7 reference checks, then implemented and
+ * verified in the Week 8 and Week 9 project work.
+ *
  * Week 8 scope: read two sequences from a FASTA file, fill the scoring matrix
  * row by row, track the maximum score and its cell, print the matrix (small
  * inputs) and the result.
+ * 
  * Week 9 scope: traceback from the best cell, print the aligned pair with its
  * coordinates, and re-score the alignment independently of the matrix.
  * Traceback priority (shared with the CUDA version): diagonal, then up
