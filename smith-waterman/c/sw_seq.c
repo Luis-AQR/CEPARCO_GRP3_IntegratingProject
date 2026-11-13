@@ -3,10 +3,14 @@
  * CEPARCO Integrating Project, Group 3
  *
  * Week 8 scope: read two sequences from a FASTA file, fill the scoring matrix
- * row by row, track the maximum score and its cell. Traceback comes in Week 9.
+ * row by row, track the maximum score and its cell, print the matrix (small
+ * inputs) and the result. Traceback comes in Week 9.
  *
- * Scoring (final, same as the proposal's worked example):
+ * Default scoring (final, same as the proposal's worked example):
  *     match +1, mismatch -1, gap -2 (linear)
+ * The defaults can be overridden at run time (--match / --mismatch / --gap),
+ * because the proposal lists the scoring parameters as inputs. The Python
+ * checks and all documented results use the defaults.
  *
  * Conventions (from the Week 7 README, the CUDA version must follow them too):
  *   - Matrix is (M+1) x (N+1); sequence a (length M) runs down the rows,
@@ -15,22 +19,49 @@
  *     score (so the update uses a strict '>').
  *   - 32-bit integer scores.
  *
- * Build:  gcc -O2 -Wall -Wextra -o sw_seq sw_seq.c
- * Run:    ./sw_seq ../data/test_paper.fasta
- *         ./sw_seq ../data/bench_1000.fasta --no-matrix
+ * Plain standard C (C99): builds unchanged with MSVC (cl), MinGW-w64 gcc, or
+ * any other C compiler. No POSIX functions are used.
+ *
+ * Build (Windows, from the repository root):
+ *     build.bat                 (picks cl or gcc automatically)
+ *     build.bat debug           (debug symbols, no optimisation)
+ * Run:
+ *     bin\sw_seq.exe data\test_paper.fasta
+ *     bin\sw_seq.exe data\bench_1000.fasta --no-matrix
+ *     bin\sw_seq.exe data\test_paper.fasta --match 2 --mismatch 1 --gap 3
  */
+#ifndef _CRT_SECURE_NO_WARNINGS
+#define _CRT_SECURE_NO_WARNINGS /* MSVC: allow fopen/strcpy without warnings */
+#endif
+
+#include <ctype.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
 
-/*scoring parameters*/
-#define MATCH_SCORE     1    /* m  */
-#define MISMATCH_PEN    1    /* mu (subtracted) */
-#define GAP_PEN         2    /* d  (subtracted, once per gap column) */
+/* Default scoring parameters */
+#define DEFAULT_MATCH 1    /* m  */
+#define DEFAULT_MISMATCH 1 /* mu (subtracted) */
+#define DEFAULT_GAP 2      /* d  (subtracted, once per gap column) */
 
 /* Print the whole matrix only when it is small enough to read. */
-#define PRINT_LIMIT     40
+#define PRINT_LIMIT 40
+
+/* Longest sequence accepted: (46001)^2 cells * 4 bytes is about 8.5 GB. */
+#define MAX_SEQ_LEN 46000
+
+typedef struct {
+    int match;    /* added when a[i] == b[j]        */
+    int mismatch; /* subtracted when a[i] != b[j]   */
+    int gap;      /* subtracted for each gap column */
+} Scoring;
+
+typedef struct {
+    int score;                   /* maximum value in the matrix            */
+    int i, j;                    /* first cell (row-major) holding it      */
+    unsigned long long checksum; /* sum of every cell, for C/CUDA compares */
+} FillResult;
 
 static int max4(int a, int b, int c, int d)
 {
@@ -44,13 +75,15 @@ static int max4(int a, int b, int c, int d)
 /* Matrix cell (i, j) in a flat array of (M+1) x (N+1) ints. */
 #define IDX(i, j, ncols) ((size_t)(i) * (size_t)(ncols) + (size_t)(j))
 
-/*input reading*/
+/* ------------------------------------------------------------------ */
+/* Input reading                                                      */
+/* ------------------------------------------------------------------ */
 
 /*
  * Reads a FASTA file with exactly two records and returns the two sequences
- * as newly allocated, upper-case, NUL-terminated strings
- * Returns 0 on success, -1 on any error (message printed to stderr)
- * Handles multi-line records, blank lines and CRLF line endings
+ * as newly allocated, upper-case, NUL-terminated strings.
+ * Returns 0 on success, -1 on any error (message printed to stderr).
+ * Handles multi-line records, blank lines and CRLF line endings.
  */
 static int read_fasta_pair(const char *path, char **out_a, char **out_b)
 {
@@ -60,15 +93,18 @@ static int read_fasta_pair(const char *path, char **out_a, char **out_b)
         return -1;
     }
 
-    char *seq[2] = { NULL, NULL };
-    size_t len[2] = { 0, 0 }, cap[2] = { 0, 0 };
-    int nrec = 0;                 /* records seen so far */
-    int cur = -1;                 /* index of the record being filled */
+    char *seq[2] = {NULL, NULL};
+    size_t len[2] = {0, 0}, cap[2] = {0, 0};
+    int nrec = 0; /* records seen so far */
+    int cur = -1; /* index of the record being filled */
 
     /* portable getline replacement: a line buffer that grows with fgets */
     size_t buf_size = 4096;
     char *line = (char *)malloc(buf_size);
-    if (!line) { fclose(f); return -1; }
+    if (!line) {
+        fclose(f);
+        return -1;
+    }
 
     for (;;) {
         size_t used = 0;
@@ -77,7 +113,13 @@ static int read_fasta_pair(const char *path, char **out_a, char **out_b)
             if (used + 2 > buf_size) {
                 buf_size *= 2;
                 char *tmp = (char *)realloc(line, buf_size);
-                if (!tmp) { free(line); fclose(f); return -1; }
+                if (!tmp) {
+                    free(line);
+                    free(seq[0]);
+                    free(seq[1]);
+                    fclose(f);
+                    return -1;
+                }
                 line = tmp;
             }
             if (!fgets(line + used, (int)(buf_size - used), f)) break;
@@ -85,15 +127,15 @@ static int read_fasta_pair(const char *path, char **out_a, char **out_b)
             used += strlen(line + used);
             if (used > 0 && line[used - 1] == '\n') break;
         }
-        if (!got_any) break;                       /* end of file */
+        if (!got_any) break; /* end of file */
 
         /* strip trailing CR / LF / spaces */
         while (used > 0 && (line[used - 1] == '\n' || line[used - 1] == '\r' ||
-                            line[used - 1] == ' '  || line[used - 1] == '\t'))
+                            line[used - 1] == ' ' || line[used - 1] == '\t'))
             line[--used] = '\0';
-        if (used == 0) continue;                   /* blank line */
+        if (used == 0) continue; /* blank line */
 
-        if (line[0] == '>') {                      /* header: start a record */
+        if (line[0] == '>') { /* header: start a record */
             if (nrec == 2) {
                 fprintf(stderr, "error: more than two records in '%s'\n", path);
                 goto fail;
@@ -142,44 +184,51 @@ fail:
     return -1;
 }
 
-/*matrix filling + score tracking*/
+/* ------------------------------------------------------------------ */
+/* Matrix filling + score tracking                                    */
+/* ------------------------------------------------------------------ */
 
 /*
  * Fills H (already zeroed by calloc, so row 0 and column 0 are the 0s required
- * by the initialisation step) and returns the maximum score through
- * best_score / best_i / best_j.
+ * by the initialisation step) row by row, left to right, and reports the
+ * maximum score, its cell and a checksum of the whole matrix.
  */
-static void fill_matrix(const char *a, int M, const char *b, int N,
-                        int *H, int *best_score, int *best_i, int *best_j)
+static FillResult fill_matrix(const char *a, int M, const char *b, int N,
+                              int *H, Scoring sc)
 {
     const int ncols = N + 1;
-    int maxScore = 0, maxI = 0, maxJ = 0;
+    FillResult r;
+    r.score = 0;
+    r.i = 0;
+    r.j = 0;
+    r.checksum = 0;
 
     for (int i = 1; i <= M; i++) {
         for (int j = 1; j <= N; j++) {
-            int s    = (a[i - 1] == b[j - 1]) ? MATCH_SCORE : -MISMATCH_PEN;
-            int diag = H[IDX(i - 1, j - 1, ncols)] + s;          /* match / mismatch */
-            int up   = H[IDX(i - 1, j,     ncols)] - GAP_PEN;    /* gap in b */
-            int left = H[IDX(i,     j - 1, ncols)] - GAP_PEN;    /* gap in a */
+            int s = (a[i - 1] == b[j - 1]) ? sc.match : -sc.mismatch;
+            int diag = H[IDX(i - 1, j - 1, ncols)] + s;      /* match / mismatch */
+            int up = H[IDX(i - 1, j, ncols)] - sc.gap;       /* gap in b */
+            int left = H[IDX(i, j - 1, ncols)] - sc.gap;     /* gap in a */
 
             int h = max4(0, diag, up, left);
             H[IDX(i, j, ncols)] = h;
+            r.checksum += (unsigned long long)h;
 
-            if (h > maxScore) {           
-                maxScore = h;
-                maxI = i;
-                maxJ = j;
+            if (h > r.score) { /* strict '>': keeps the FIRST maximum */
+                r.score = h;
+                r.i = i;
+                r.j = j;
             }
         }
     }
-    *best_score = maxScore;
-    *best_i = maxI;
-    *best_j = maxJ;
+    return r;
 }
 
-/*output*/
+/* ------------------------------------------------------------------ */
+/* Output                                                             */
+/* ------------------------------------------------------------------ */
 
-static void print_matrix(const char *a, int M, const char *b, int N, const int *H)
+static void print_matrix(const char *b, int N, const char *a, int M, const int *H)
 {
     const int ncols = N + 1;
     printf("\nScore matrix H (%d x %d):\n\n", M + 1, N + 1);
@@ -198,57 +247,99 @@ static void print_matrix(const char *a, int M, const char *b, int N, const int *
     }
 }
 
+static void usage(const char *prog)
+{
+    fprintf(stderr,
+            "usage: %s <input.fasta> [--no-matrix] [--match N] [--mismatch N] [--gap N]\n"
+            "  FASTA with exactly two records; sequence 1 runs down the rows.\n"
+            "  Defaults: match +%d, mismatch -%d, gap -%d (N must be a positive integer).\n",
+            prog, DEFAULT_MATCH, DEFAULT_MISMATCH, DEFAULT_GAP);
+}
+
+/* Parses a positive int; returns 0 on success, -1 otherwise. */
+static int parse_positive(const char *text, int *out)
+{
+    char *end = NULL;
+    errno = 0;
+    long v = strtol(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0' || v < 1 || v > 1000000) return -1;
+    *out = (int)v;
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
-    if (argc < 2) {
-        fprintf(stderr, "usage: %s <input.fasta> [--no-matrix]\n", argv[0]);
+    if (argc < 2 || strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
+        usage(argv[0]);
         return 2;
     }
+
+    Scoring sc = {DEFAULT_MATCH, DEFAULT_MISMATCH, DEFAULT_GAP};
     int show_matrix = 1;
-    for (int k = 2; k < argc; k++)
-        if (strcmp(argv[k], "--no-matrix") == 0) show_matrix = 0;
+    for (int k = 2; k < argc; k++) {
+        int *target = NULL;
+        if (strcmp(argv[k], "--no-matrix") == 0) {
+            show_matrix = 0;
+            continue;
+        } else if (strcmp(argv[k], "--match") == 0) {
+            target = &sc.match;
+        } else if (strcmp(argv[k], "--mismatch") == 0) {
+            target = &sc.mismatch;
+        } else if (strcmp(argv[k], "--gap") == 0) {
+            target = &sc.gap;
+        } else {
+            fprintf(stderr, "error: unknown option '%s'\n", argv[k]);
+            usage(argv[0]);
+            return 2;
+        }
+        if (k + 1 >= argc || parse_positive(argv[k + 1], target) != 0) {
+            fprintf(stderr, "error: %s needs a positive integer\n", argv[k]);
+            return 2;
+        }
+        k++;
+    }
 
     char *a = NULL, *b = NULL;
     if (read_fasta_pair(argv[1], &a, &b) != 0) return 1;
 
     size_t Ms = strlen(a), Ns = strlen(b);
-    if (Ms > 46000 || Ns > 46000) {   /* keeps (M+1)*(N+1)*4 bytes under 8 GB */
-        fprintf(stderr, "error: sequences too long for this program\n");
-        free(a); free(b);
+    if (Ms > MAX_SEQ_LEN || Ns > MAX_SEQ_LEN) {
+        fprintf(stderr, "error: sequences longer than %d are not supported\n", MAX_SEQ_LEN);
+        free(a);
+        free(b);
         return 1;
     }
     int M = (int)Ms, N = (int)Ns;
 
     size_t cells = (size_t)(M + 1) * (size_t)(N + 1);
-    int *H = (int *)calloc(cells, sizeof(int)); 
+    double mb = (double)cells * sizeof(int) / (1024.0 * 1024.0);
+    int *H = (int *)calloc(cells, sizeof(int));
     if (!H) {
-        fprintf(stderr, "error: cannot allocate %.1f MB for the matrix\n",
-                (double)cells * sizeof(int) / (1024.0 * 1024.0));
-        free(a); free(b);
+        fprintf(stderr, "error: cannot allocate %.1f MB for the matrix\n", mb);
+        free(a);
+        free(b);
         return 1;
     }
 
-    int best_score, best_i, best_j;
-    fill_matrix(a, M, b, N, H, &best_score, &best_i, &best_j);
+    FillResult res = fill_matrix(a, M, b, N, H, sc);
 
     printf("Smith-Waterman (sequential C)\n");
     printf("File     : %s\n", argv[1]);
     printf("Lengths  : M = %d (rows), N = %d (columns)\n", M, N);
-    printf("Scoring  : match +%d, mismatch -%d, gap -%d\n",
-           MATCH_SCORE, MISMATCH_PEN, GAP_PEN);
-    printf("Matrix   : %zu cells, %.1f MB\n", cells,
-           (double)cells * sizeof(int) / (1024.0 * 1024.0));
+    printf("Scoring  : match +%d, mismatch -%d, gap -%d\n", sc.match, sc.mismatch, sc.gap);
+    printf("Matrix   : %llu cells, %.1f MB\n", (unsigned long long)cells, mb);
 
     if (show_matrix && M <= PRINT_LIMIT && N <= PRINT_LIMIT)
-        print_matrix(a, M, b, N, H);
+        print_matrix(b, N, a, M, H);
     else if (show_matrix)
         printf("(matrix not printed: larger than %d x %d)\n", PRINT_LIMIT, PRINT_LIMIT);
 
-    printf("\nMax score: %d\n", best_score);
-    if (best_score > 0)
-        printf("Max cell : H(%d, %d)\n", best_i, best_j);
+    printf("\nMax score: %d\n", res.score);
+    if (res.score > 0)
+        printf("Max cell : H(%d, %d)\n", res.i, res.j);
     else
         printf("Max cell : none (no local alignment, every cell is 0)\n");
+    printf("Checksum : %llu (sum of all matrix cells)\n", res.checksum);
 
     free(H);
     free(a);

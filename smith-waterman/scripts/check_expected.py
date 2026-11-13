@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 check_expected.py - Week 7: confirm the expected results of the test sequences.
 
@@ -11,7 +10,7 @@ Scoring (finalised): match +1, mismatch -1, gap -2 (linear).
 Traceback priority: diagonal > up > left (as in the proposal's pseudocode).
 Maximum cell: first one in row-major order (strict '>').
 
-Usage:  python3 scripts/check_expected.py          (run from the repo root)
+Usage:  python scripts\\check_expected.py          (run from the repo root)
 """
 import os
 import sys

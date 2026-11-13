@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 gen_sequences.py - generate a reproducible FASTA pair for benchmarking.
 
@@ -9,7 +8,7 @@ gives the Smith-Waterman run a clear, long local alignment to find and to
 reconstruct, while the rest of the sequences stay unrelated.
 
 Usage:
-    python3 scripts/gen_sequences.py --length 1000 --seed 1 --out data/bench_1000.fasta
+    python scripts\\gen_sequences.py --length 1000 --seed 1 --out data/bench_1000.fasta
 """
 import argparse
 import random
@@ -71,7 +70,7 @@ def main():
     b = rand_dna(rng, left_b) + core_b + rand_dna(rng, room - left_b)
     assert len(a) == n and len(b) == n
 
-    with open(args.out, "w") as f:
+    with open(args.out, "w", newline="\n") as f:   # LF on every OS
         f.write(f">seq_a_len{n}_seed{args.seed}\n{wrap(a)}\n")
         f.write(f">seq_b_len{n}_seed{args.seed}_shared_region_mutated\n{wrap(b)}\n")
     print(f"wrote {args.out}: 2 x {n} bases, shared region ~{core_len} bases, "
