@@ -186,17 +186,6 @@ Expected score matrix for `test_paper.fasta`:
 * **Memory:** the full matrix is stored for traceback (about 380 MB at 10,000 x 10,000), so larger inputs are limited by GPU memory.
 * **Speedup is not yet known.** One kernel launch per anti-diagonal adds launch overhead; the tiled wavefront approach is the planned fallback in Week 12 if profiling shows it limits speedup.
 
-### Team contributions (Week 7)
-
-| Member | Contribution |
-|--------|--------------|
-| Alcasid, Aizy | |
-| Bilanes, Kendrick | |
-| Corpuz, Gerald | |
-| Roa, Luis | |
-
----
-
 ## Repository contents (as of Week 7)
 
 ```
