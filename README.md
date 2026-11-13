@@ -88,7 +88,7 @@ passage or an unrecognised malware variant.
 
 | Week | Milestone (from the proposal) | Status |
 |------|-------------------------------|--------|
-| 7 | Finalise scoring parameters and test sequences; set up Colab notebook and GitHub repository | **Done** - 3 Colab/merge confirmations still open, see *Open items* |
+| 7 | Finalise scoring parameters and test sequences; set up Colab notebook and GitHub repository | **Done** - Colab confirmed; merge into `main` still open, see *Open items* |
 | **8** | Sequential C: input reading, matrix filling, score tracking | **Done** (see *Week 8 report*) - C output matches the Python reference on all 6 inputs checked |
 | 9 | C traceback; record baseline execution times | Not started |
 | 10 | Mid-project demo: C baseline + working CUDA matrix filling | Not started |
@@ -139,7 +139,8 @@ were recorded this week (planned for Week 9).
   comparison need; no optimisation beyond `-O2` since this is the baseline for the speedup.
 * **Full matrix in memory** (`int`, 4 bytes per cell), as planned for traceback: 381.5 MB at 10,000 x 10,000.
 * **Size guard.** Sequences longer than 46,000 are rejected so `(M+1) x (N+1) x 4` bytes stays under about 8 GB, and an allocation failure is reported instead of crashing.
-* **Scoring constants** (`MATCH_SCORE`, `MISMATCH_PEN`, `GAP_PEN`) are `#define`s at the top of the file so the CUDA code can use the same values.
+* **Scoring** lives in a `Scoring` struct filled from `DEFAULT_MATCH` / `DEFAULT_MISMATCH` / `DEFAULT_GAP` `#define`s, so the CUDA code can use the same values; `--match`, `--mismatch`, `--gap` override them at run time.
+* **Checksum.** The program also prints the sum of all matrix cells, so the Week 10 CUDA matrix can be compared with the C matrix on the large inputs without printing them: `bench_1000` 1,563,453; `bench_5000` 1,445,075,095; `bench_10000` 1,009,197,635 (`test_paper` 8, `test_identical` 100, `test_nomatch` 0, `test_gap` 222).
 
 ### Limitations / not yet done
 
@@ -148,14 +149,13 @@ were recorded this week (planned for Week 9).
 * `bench_10000` was run in C only. The matrix comparison is limited to inputs up to 40 x 40; larger inputs are compared by score and cell.
 * `bench_5000` is only checked when `check_c_week8.py` is run with `--all`.
 
-### Open items (carried over from Week 7)
+### Open items
 
-- [ ] Run the last cell of `SW_Week7_Setup.ipynb` and record the Colab environment: GPU `<model>`, driver `<version>`, CUDA `<version>`
-- [ ] Confirm `check_expected.py` prints `All checks passed.` and the CUDA smoke test prints `-> OK` on Colab
-- [ ] Compile and run `sw_seq` on Colab (the Week 8 results above were produced locally with gcc)
+- [ ] Run `check_c_week8.py` on Windows with your compiler and confirm it ends with `All C results match the reference.`
+- [ ] Compile and run `sw_seq` on Colab (step 7 of the notebook); the Week 8 results above were produced locally
 - [ ] Merge the Week 7 and Week 8 branches into `main`
 - [ ] Update Figures 7 and 8 in the proposal (H(4,2) = 1)
-- [ ] Optional: flatten the repository layout (see Week 7, issue 3); move the 23 MB pitch video out of the repository
+- [ ] Move the 23 MB pitch video out of the repository (`git rm --cached "CEPARCO Integrating Project Pitch.mp4"`) and link it here: `<video link>`
 
 ### Plan for Week 9
 
@@ -170,12 +170,18 @@ were recorded this week (planned for Week 9).
 
 From `smith-waterman/`:
 
-```bash
-gcc -O2 -Wall -Wextra -o c/sw_seq c/sw_seq.c
-./c/sw_seq data/test_paper.fasta                 # matrix + max score 3 at H(4, 5)
-./c/sw_seq data/bench_10000.fasta --no-matrix    # score and cell only
-python3 scripts/check_c_week8.py                 # C vs Python reference (add --all for bench_5000)
+```bat
+mkdir bin
+gcc -std=c99 -O2 -Wall -Wextra -o bin\sw_seq.exe c\sw_seq.c         :: MinGW-w64
+cl /nologo /O2 /W4 /Fobin\ /Febin\sw_seq.exe c\sw_seq.c             :: or MSVC (x64 Native Tools Command Prompt)
+bin\sw_seq.exe data\test_paper.fasta                 :: matrix + max score 3 at H(4, 5) + checksum
+bin\sw_seq.exe data\bench_10000.fasta --no-matrix    :: score, cell and checksum only
+python scripts\check_c_week8.py                      :: C vs Python reference (add --all for bench_5000)
 ```
+
+`check_c_week8.py` looks for `bin\sw_seq.exe` (use `--exe PATH` otherwise) and should end with
+`All C results match the reference.` Options: `--no-matrix`, `--match N`, `--mismatch N`, `--gap N`
+(positive integers, defaults 1 / 1 / 2; the checks use the defaults). Do not commit `bin/`.
 
 ---
 
@@ -244,13 +250,13 @@ Expected score matrix for `test_paper.fasta`:
 2. **Colab notebook bug.** The benchmark-regeneration cell used a `for` loop with `!` shell commands; Colab did not expand the loop variable, so the generator received an empty `--length` and every file was wrongly reported as `DIFFERENT`. *Fix:* the cell is now a `%%bash` cell; all three files report `identical`.
 3. **Repository layout.** The project folder was copied into the repository as `smith-waterman/smith-waterman/`, so `scripts/check_expected.py` was not found from the clone root. *Fix:* the notebook now locates the project root automatically. *Recommended:* flatten the layout so `data/`, `scripts/`, `colab/` sit at the repository root.
 
-### Open items to close Week 7 (still open, tracked under Week 8)
+### Open items to close Week 7
 
-- [ ] Run the last notebook cell and record the Colab environment: GPU `<model>`, driver `<version>`, CUDA `<version>`
-- [ ] Confirm `check_expected.py` prints `All checks passed.` and the CUDA smoke test prints `-> OK` on Colab
-- [ ] Merge `build/week7-requirements` into `main`
+- [x] Colab environment recorded (12 Nov 2026): Tesla T4 (15360 MiB), driver 580.82.07, CUDA 13.0 (`nvcc` 13.0.88), Python 3.13.16, gcc 13.3.0
+- [x] `check_expected.py` prints `All checks passed.` and the CUDA smoke test prints `-> OK` on Colab
+- [ ] Merge `build/week7-requirements` into `main` (see Week 8 open items)
 - [ ] Update Figures 7 and 8 in the proposal (H(4,2) = 1)
-- [ ] Optional: flatten the repository layout; consider moving the 23 MB pitch video out of the repository, since every Colab clone downloads it
+- [ ] Optional: flatten the repository layout
 
 ### Risks and notes
 
@@ -273,8 +279,8 @@ results/                   benchmark output goes here (Weeks 9 and 12)
 
 ## Reproducing the Week 7 checks
 
-```bash
-python3 scripts/check_expected.py                      # expect: All checks passed.
+```bat
+python scripts\check_expected.py                       :: expect: All checks passed.
 python scripts\gen_sequences.py --length 10000 --seed 1 --out b10k.fasta
 fc b10k.fasta data\bench_10000.fasta
 del b10k.fasta
